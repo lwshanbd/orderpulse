@@ -43,6 +43,10 @@ class RefreshingTesla implements TeslaGateway {
     return [];
   }
 
+  async getOrderDetails(): Promise<unknown> {
+    throw new Error("not used");
+  }
+
   async refresh(refreshToken: string): Promise<TeslaTokenResponse> {
     assert.equal(refreshToken, "old-refresh");
     this.refreshCalls += 1;
@@ -122,6 +126,9 @@ test("an early 401 refreshes once and retries without a routine region request",
       }
       assert.equal(accessToken, "new-access");
       return [];
+    },
+    async getOrderDetails() {
+      throw new Error("not used");
     },
     async refresh(refreshToken) {
       assert.equal(refreshToken, "old-refresh");

@@ -61,6 +61,21 @@ export class TeslaTokenService {
     }
   }
 
+  async getOrderDetails(referenceNumber: string, countryCode?: string): Promise<unknown> {
+    const accessToken = await this.#getValidAccessToken();
+    try {
+      return await this.#tesla.getOrderDetails(accessToken, referenceNumber, countryCode);
+    } catch (error) {
+      if (!(error instanceof TeslaRequestError) || error.status !== 401) throw error;
+      const refreshedAccessToken = await this.#forceRefresh(accessToken);
+      return this.#tesla.getOrderDetails(
+        refreshedAccessToken,
+        referenceNumber,
+        countryCode,
+      );
+    }
+  }
+
   async #getOrdersWithRegionRecovery(
     accessToken: string,
     fleetBaseUrl: string,

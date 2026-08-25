@@ -131,7 +131,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
   }
   const mobilePairingTtlSeconds = parsePositiveInteger(
     env.MOBILE_PAIRING_TTL_SECONDS,
-    600,
+    3_600,
     "MOBILE_PAIRING_TTL_SECONDS",
   );
   if (mobilePairingTtlSeconds > 3_600) {

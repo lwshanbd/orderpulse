@@ -25,6 +25,8 @@ const REGION_BASE_URLS: Record<string, string> = {
   CHINA: "https://fleet-api.prd.cn.vn.cloud.tesla.cn",
 };
 
+const UNDOCUMENTED_ORDER_DETAILS_URL = "https://akamai-apigateway-vfx.tesla.com/tasks";
+
 export class TeslaRequestError extends Error {
   readonly status: number;
   readonly code: string | null;
@@ -197,6 +199,33 @@ export class TeslaClient implements TeslaGateway {
       throw new Error("Tesla returned an invalid orders response");
     }
     return raw.response.filter(isRecord) as TeslaOrder[];
+  }
+
+  async getOrderDetails(
+    accessToken: string,
+    referenceNumber: string,
+    countryCode?: string,
+  ): Promise<unknown> {
+    const normalizedCountryCode = countryCode?.trim().toUpperCase();
+    const url = new URL(UNDOCUMENTED_ORDER_DETAILS_URL);
+    url.searchParams.set("deviceLanguage", "en");
+    url.searchParams.set(
+      "deviceCountry",
+      normalizedCountryCode && /^[A-Z]{2}$/.test(normalizedCountryCode)
+        ? normalizedCountryCode
+        : "US",
+    );
+    url.searchParams.set("referenceNumber", referenceNumber);
+    url.searchParams.set("appVersion", "9.99.9-9999");
+
+    const response = await fetch(url, {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: "application/json",
+      },
+      signal: AbortSignal.timeout(this.#config.requestTimeoutMs),
+    });
+    return this.#parseResponse(response);
   }
 
   async #requestToken(body: URLSearchParams): Promise<unknown> {

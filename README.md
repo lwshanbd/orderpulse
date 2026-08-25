@@ -11,12 +11,13 @@
 - `GET /api/status`：只返回授权是否存在、有效期、scope 和 Fleet 区域。
 - `GET /api/orders`：立即调用 Tesla、更新快照，并只返回脱敏订单。这个请求可能产生 Tesla 计费使用量。
 - `GET /api/orders/schema`：返回原始响应的字段路径和数据类型，不返回字段值。这个接口用于第一次适配真实 Tesla 响应。
+- `GET /api/order-details/schema`：手动探测 Tesla 未公开的 delivery API，只返回字段路径和类型，不返回订单值；不会被后台轮询调用。
 - `GET /api/order-state`：只读 SQLite 中的最新快照，不调用 Tesla。
 - `GET /api/events?limit=50`：只读状态变化历史，不调用 Tesla。
 - `GET /api/polling/status`：返回调度配置、下次运行时间和最近一次结果。
 - `POST /api/polling/run`：手动执行一次查询与变化检测。
 - `DELETE /api/authorization`：删除 NAS 上保存的 Tesla 授权。
-- `POST /api/devices/pairing-code`：管理员生成 10 分钟有效、只能使用一次的 iPhone 配对码。
+- `POST /api/devices/pairing-code`：管理员生成 1 小时有效、只能使用一次的 iPhone 配对码。
 - `GET /api/devices`：管理员查看已配对设备和推送状态，不返回设备凭证或 APNs token。
 - `DELETE /api/devices/:id`：管理员撤销一台设备。
 - `POST /api/devices/:id/test-notification`：管理员向一台已注册设备发送 APNs 测试提醒。
@@ -119,7 +120,7 @@ docker compose ps
 curl -u orderpulse -X POST https://orderpulse.baodishan.com/api/devices/pairing-code
 ```
 
-在 OrderPulse App 输入返回的 `code`。配对码 10 分钟后失效且只能用一次。App 下拉刷新只读取 NAS 已有快照，不会额外请求 Tesla；Tesla 的调用频率仍完全由 NAS 轮询器控制。
+在 OrderPulse App 输入返回的 `code`。配对码 1 小时后失效且只能用一次；它只负责首次交换设备凭证。换到的设备凭证没有 1 小时限制，会一直保存在 iOS Keychain，直到用户解除配对或管理员撤销设备。App 下拉刷新只读取 NAS 已有快照，不会额外请求 Tesla；Tesla 的调用频率仍完全由 NAS 轮询器控制。
 
 ## Apple Push Notifications
 

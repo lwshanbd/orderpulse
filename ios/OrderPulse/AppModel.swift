@@ -119,7 +119,11 @@ final class AppModel: ObservableObject {
         ) { [weak self] notification in
             let detail = notification.object as? String
             Task { @MainActor [weak self] in
-                self?.notificationStatus = detail.map { "APNs 注册失败：\($0)" } ?? "APNs 注册失败"
+                if detail?.contains("aps-environment") == true {
+                    self?.notificationStatus = "当前安装包缺少推送签名；订单查询不受影响"
+                } else {
+                    self?.notificationStatus = detail.map { "APNs 注册失败：\($0)" } ?? "APNs 注册失败"
+                }
             }
         })
     }

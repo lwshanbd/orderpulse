@@ -573,6 +573,42 @@ export function createApp({
     }
   });
 
+  app.get("/api/order-details/schema", { preHandler: requireAdmin }, async (_request, reply) => {
+    try {
+      const orders = await tokenService.getOrders();
+      const order = orders.find(
+        (candidate) =>
+          typeof candidate.referenceNumber === "string" && candidate.referenceNumber.length > 0,
+      );
+      if (!order?.referenceNumber) {
+        return reply.code(409).send({
+          error: "no_active_order",
+          message: "Tesla did not return an active order with a reference number",
+        });
+      }
+      const details = await tokenService.getOrderDetails(
+        order.referenceNumber,
+        order.countryCode,
+      );
+      return {
+        source: "undocumented_tesla_delivery_api",
+        warning: "This endpoint is not part of the supported Tesla Fleet API",
+        fields: describeShape(details),
+      };
+    } catch (caught) {
+      if (caught instanceof TeslaRequestError) {
+        return reply.code(502).send({
+          error: "order_details_probe_failed",
+          upstreamStatus: caught.status,
+          ...(caught.code ? { teslaCode: caught.code } : {}),
+          ...(caught.transactionId ? { transactionId: caught.transactionId } : {}),
+        });
+      }
+      const safe = publicError(caught);
+      return reply.code(safe.statusCode).send(safe.body);
+    }
+  });
+
   app.delete("/api/authorization", { preHandler: requireAdmin }, async (_request, reply) => {
     database.deleteTeslaTokens();
     return reply.code(204).send();

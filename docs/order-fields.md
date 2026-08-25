@@ -22,6 +22,12 @@
 
 ## 预计交付日期
 
-当前真实响应没有 VIN、交付地点、预约时间或预计交付日期；Tesla 公开 Fleet API 文档也没有另一个订单交付日期 endpoint。因此 OrderPulse 目前无法通过受支持的官方 API 提供预计交付日期。
+当前 Fleet API 真实响应没有 VIN、交付地点、预约时间或预计交付日期；Tesla 公开文档也没有受支持的订单交付详情 endpoint。
 
-一些第三方产品可能使用 Tesla 网站或 App 的未公开账号接口。OrderPulse 默认不采用这种方案：它可能随时变更，并扩大账号凭证与服务条款风险。如果将来官方 orders 响应新增日期字段，可先用管理员接口 `/api/orders/schema` 只查看字段路径和类型，再显式加入白名单；该接口不会返回字段值。
+进一步调查发现，Tesla 自有 App 使用的未公开 delivery API 可能包含以下字段：
+
+- `tasks.scheduling.deliveryWindowDisplay`：预计交付窗口
+- `tasks.scheduling.apptDateTimeAddressStr`：交付预约
+- `tasks.finalPayment.data.etaToDeliveryCenter`：到达交付中心的 ETA
+
+这些字段不是 Fleet API 合约的一部分，可能随时改变；第三方 Fleet token 也不一定被该服务接受。因此 OrderPulse 只增加管理员手动探测入口 `/api/order-details/schema`，它使用第一笔活跃订单在内存中发起一次请求，并只返回字段路径和类型，不返回完整订单号或任何字段值。探测成功并审阅 schema 之前，后台轮询和 iOS App 都不会依赖该接口。

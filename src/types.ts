@@ -31,6 +31,7 @@ export interface TeslaOrder extends Record<string, unknown> {
   modelCode?: string;
   vin?: string;
   mktOptions?: string | string[];
+  countryCode?: string;
 }
 
 export interface TeslaRegionResult {
@@ -46,5 +47,10 @@ export interface TeslaGateway {
   }): Promise<{ tokens: TeslaTokenResponse; subject: string | null }>;
   getRegion(accessToken: string): Promise<TeslaRegionResult>;
   getOrders(accessToken: string, fleetBaseUrl: string): Promise<TeslaOrder[]>;
+  getOrderDetails(
+    accessToken: string,
+    referenceNumber: string,
+    countryCode?: string,
+  ): Promise<unknown>;
   refresh(refreshToken: string): Promise<TeslaTokenResponse>;
 }

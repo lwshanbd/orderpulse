@@ -69,6 +69,23 @@ class MockTesla implements TeslaGateway {
     ];
   }
 
+  async getOrderDetails(
+    _accessToken: string,
+    referenceNumber: string,
+    countryCode?: string,
+  ): Promise<unknown> {
+    assert.equal(referenceNumber, "RN123456789");
+    assert.equal(countryCode, undefined);
+    return {
+      tasks: {
+        scheduling: {
+          deliveryWindowDisplay: "August 28 - September 3",
+          apptDateTimeAddressStr: "Private delivery appointment",
+        },
+      },
+    };
+  }
+
   async refresh(_refreshToken: string): Promise<TeslaTokenResponse> {
     throw new Error("refresh should not run in this test");
   }
@@ -238,6 +255,15 @@ test("service protects admin routes and completes a one-time OAuth callback", as
   assert.equal(schema.statusCode, 200);
   assert.match(schema.body, /delivery\.street/);
   assert.doesNotMatch(schema.body, /123 Private Road/);
+
+  const detailSchema = await app.inject({
+    method: "GET",
+    url: "/api/order-details/schema",
+    headers: { authorization },
+  });
+  assert.equal(detailSchema.statusCode, 200);
+  assert.match(detailSchema.body, /tasks\.scheduling\.deliveryWindowDisplay/);
+  assert.doesNotMatch(detailSchema.body, /August 28|Private delivery appointment|RN123456789/);
 
   const pairingCodeResponse = await app.inject({
     method: "POST",

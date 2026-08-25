@@ -33,7 +33,7 @@ test("configuration limits OAuth scopes to order-read requirements", () => {
   assert.equal(config.orderPollingEnabled, false);
   assert.equal(config.orderPollingIntervalSeconds, 1_800);
   assert.equal(config.orderMissingThreshold, 3);
-  assert.equal(config.mobilePairingTtlSeconds, 600);
+  assert.equal(config.mobilePairingTtlSeconds, 3_600);
   assert.equal(config.apnsEnabled, false);
   assert.equal(config.apnsTopic, "com.baodishan.orderpulse");
 });
