@@ -7,6 +7,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     DEVELOPMENT_LANGUAGE: zh-Hans
+    DEVELOPMENT_TEAM: S4BS47942Q
 targets:
   OrderPulse:
     type: application
