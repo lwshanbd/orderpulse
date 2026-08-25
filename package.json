@@ -1,0 +1,27 @@
+{
+  "name": "orderpulse-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal Tesla order tracking service for the OrderPulse iOS app",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/src/server.js",
+    "test": "tsx --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "fastify": "^5.6.1",
+    "jose": "^6.1.2",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

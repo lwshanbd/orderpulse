@@ -1,0 +1,10 @@
+.git
+.gitignore
+node_modules
+dist
+test
+data
+secrets
+.env*
+*.log
+README.md

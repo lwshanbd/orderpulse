@@ -1,0 +1,161 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { z } from "zod";
+
+const environmentSchema = z.enum(["development", "test", "production"]);
+
+export interface ServiceConfig {
+  nodeEnv: "development" | "test" | "production";
+  host: string;
+  port: number;
+  dataDir: string;
+  databasePath: string;
+  publicBaseUrl: string;
+  redirectUri: string;
+  adminUsername: string;
+  adminPassword: string;
+  tokenEncryptionKey: Buffer;
+  teslaClientId: string;
+  teslaClientSecret: string;
+  teslaFleetBaseUrl: string;
+  teslaAuthorizationUrl: string;
+  teslaTokenUrl: string;
+  teslaOidcIssuer: string;
+  teslaJwksUrl: string;
+  teslaScopes: string[];
+  teslaPublicKeyFile: string;
+  oauthTransactionTtlSeconds: number;
+  requestTimeoutMs: number;
+  requireIdToken: boolean;
+}
+
+function readConfiguredValue(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  options: { secret?: boolean; production?: boolean } = {},
+): string {
+  const directValue = env[name]?.trim();
+  const filePath = env[`${name}_FILE`]?.trim();
+
+  if (directValue && filePath) {
+    throw new Error(`Configure only one of ${name} or ${name}_FILE`);
+  }
+
+  if (filePath) {
+    const value = readFileSync(filePath, "utf8").trim();
+    if (!value) {
+      throw new Error(`${name}_FILE points to an empty file`);
+    }
+    return value;
+  }
+
+  if (directValue) {
+    if (options.secret && options.production) {
+      throw new Error(`${name} must be supplied through ${name}_FILE in production`);
+    }
+    return directValue;
+  }
+
+  throw new Error(`Missing required configuration: ${name} or ${name}_FILE`);
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number, name: string): number {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function parseBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`Expected a boolean value, received: ${value}`);
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig {
+  const nodeEnv = environmentSchema.parse(env.NODE_ENV ?? "development");
+  const production = nodeEnv === "production";
+  const dataDir = resolve(env.DATA_DIR ?? "./data");
+
+  const publicUrl = new URL(env.PUBLIC_BASE_URL ?? "https://orderpulse.baodishan.com");
+  if (publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash) {
+    throw new Error("PUBLIC_BASE_URL must be an origin without a path, query, or fragment");
+  }
+  if (production && publicUrl.protocol !== "https:") {
+    throw new Error("PUBLIC_BASE_URL must use HTTPS in production");
+  }
+
+  const adminPassword = readConfiguredValue(env, "ADMIN_PASSWORD", {
+    secret: true,
+    production,
+  });
+  if (adminPassword.length < 16) {
+    throw new Error("ADMIN_PASSWORD must contain at least 16 characters");
+  }
+
+  const encodedEncryptionKey = readConfiguredValue(env, "TOKEN_ENCRYPTION_KEY", {
+    secret: true,
+    production,
+  });
+  const tokenEncryptionKey = Buffer.from(encodedEncryptionKey, "base64");
+  if (tokenEncryptionKey.length !== 32) {
+    throw new Error("TOKEN_ENCRYPTION_KEY must be exactly 32 random bytes encoded as base64");
+  }
+
+  const scopeString = env.TESLA_SCOPES?.trim() || "openid offline_access user_data";
+  const teslaScopes = [...new Set(scopeString.split(/\s+/).filter(Boolean))];
+  const allowedScopes = new Set(["openid", "offline_access", "user_data"]);
+  const unexpectedScope = teslaScopes.find((scope) => !allowedScopes.has(scope));
+  if (unexpectedScope) {
+    throw new Error(`TESLA_SCOPES contains an unnecessary or unsupported scope: ${unexpectedScope}`);
+  }
+  for (const requiredScope of allowedScopes) {
+    if (!teslaScopes.includes(requiredScope)) {
+      throw new Error(`TESLA_SCOPES must include ${requiredScope}`);
+    }
+  }
+
+  return {
+    nodeEnv,
+    host: env.HOST?.trim() || "127.0.0.1",
+    port: parsePositiveInteger(env.PORT, 8787, "PORT"),
+    dataDir,
+    databasePath: resolve(dataDir, "orderpulse.sqlite"),
+    publicBaseUrl: publicUrl.origin,
+    redirectUri: new URL("/oauth/tesla/callback", publicUrl).toString(),
+    adminUsername: env.ADMIN_USERNAME?.trim() || "orderpulse",
+    adminPassword,
+    tokenEncryptionKey,
+    teslaClientId: readConfiguredValue(env, "TESLA_CLIENT_ID", { production }),
+    teslaClientSecret: readConfiguredValue(env, "TESLA_CLIENT_SECRET", {
+      secret: true,
+      production,
+    }),
+    teslaFleetBaseUrl:
+      env.TESLA_FLEET_BASE_URL?.trim() || "https://fleet-api.prd.na.vn.cloud.tesla.com",
+    teslaAuthorizationUrl:
+      env.TESLA_AUTHORIZATION_URL?.trim() || "https://auth.tesla.com/oauth2/v3/authorize",
+    teslaTokenUrl:
+      env.TESLA_TOKEN_URL?.trim() ||
+      "https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token",
+    teslaOidcIssuer:
+      env.TESLA_OIDC_ISSUER?.trim() || "https://auth.tesla.com/oauth2/v3/nts",
+    teslaJwksUrl:
+      env.TESLA_JWKS_URL?.trim() ||
+      "https://auth.tesla.com/oauth2/v3/discovery/thirdparty/keys",
+    teslaScopes,
+    teslaPublicKeyFile: resolve(
+      env.TESLA_PUBLIC_KEY_FILE ??
+        "./public/.well-known/appspecific/com.tesla.3p.public-key.pem",
+    ),
+    oauthTransactionTtlSeconds: parsePositiveInteger(
+      env.OAUTH_TRANSACTION_TTL_SECONDS,
+      600,
+      "OAUTH_TRANSACTION_TTL_SECONDS",
+    ),
+    requestTimeoutMs: parsePositiveInteger(env.REQUEST_TIMEOUT_MS, 10_000, "REQUEST_TIMEOUT_MS"),
+    requireIdToken: parseBoolean(env.TESLA_REQUIRE_ID_TOKEN, true),
+  };
+}

@@ -1,0 +1,59 @@
+services:
+  orderpulse:
+    build:
+      context: .
+    image: orderpulse-service:local
+    container_name: orderpulse
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8787
+      DATA_DIR: /app/data
+      PUBLIC_BASE_URL: https://orderpulse.baodishan.com
+      ADMIN_USERNAME: orderpulse
+      ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/token_encryption_key
+      TESLA_CLIENT_ID_FILE: /run/secrets/tesla_client_id
+      TESLA_CLIENT_SECRET_FILE: /run/secrets/tesla_client_secret
+      TESLA_FLEET_BASE_URL: https://fleet-api.prd.na.vn.cloud.tesla.com
+      TESLA_SCOPES: openid offline_access user_data
+      TESLA_PUBLIC_KEY_FILE: /app/public/.well-known/appspecific/com.tesla.3p.public-key.pem
+    secrets:
+      - admin_password
+      - token_encryption_key
+      - tesla_client_id
+      - tesla_client_secret
+    volumes:
+      - ./data:/app/data
+      - ./public:/app/public:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8787/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+secrets:
+  admin_password:
+    file: ./secrets/admin_password.txt
+  token_encryption_key:
+    file: ./secrets/token_encryption_key.txt
+  tesla_client_id:
+    file: ./secrets/tesla_client_id.txt
+  tesla_client_secret:
+    file: ./secrets/tesla_client_secret.txt

@@ -1,0 +1,87 @@
+import type { OrderPulseDatabase } from "./database.js";
+import type { TeslaGateway, TeslaOrder } from "./types.js";
+
+export class TeslaTokenService {
+  readonly #database: OrderPulseDatabase;
+  readonly #tesla: TeslaGateway;
+  #refreshInFlight: Promise<string> | null = null;
+
+  constructor(database: OrderPulseDatabase, tesla: TeslaGateway) {
+    this.#database = database;
+    this.#tesla = tesla;
+  }
+
+  async saveAuthorization(input: {
+    code: string;
+    expectedNonce: string;
+    defaultFleetBaseUrl: string;
+  }): Promise<{ fleetBaseUrl: string; subject: string | null }> {
+    const result = await this.#tesla.exchangeAuthorizationCode({
+      code: input.code,
+      expectedNonce: input.expectedNonce,
+    });
+    this.#database.saveTeslaTokens({
+      tokens: result.tokens,
+      fleetBaseUrl: input.defaultFleetBaseUrl,
+      subject: result.subject,
+    });
+
+    let fleetBaseUrl = input.defaultFleetBaseUrl;
+    try {
+      const region = await this.#tesla.getRegion(result.tokens.access_token);
+      fleetBaseUrl = region.fleetBaseUrl;
+      this.#database.updateFleetBaseUrl(fleetBaseUrl);
+    } catch {
+      // The token is still safely stored. The region call is retried before order retrieval.
+    }
+    return { fleetBaseUrl, subject: result.subject };
+  }
+
+  async getOrders(): Promise<TeslaOrder[]> {
+    const accessToken = await this.#getValidAccessToken();
+    const stored = this.#database.loadTeslaTokens();
+    if (!stored) throw new Error("Tesla authorization is not configured");
+
+    let fleetBaseUrl = stored.fleetBaseUrl;
+    try {
+      const region = await this.#tesla.getRegion(accessToken);
+      fleetBaseUrl = region.fleetBaseUrl;
+      if (fleetBaseUrl !== stored.fleetBaseUrl) {
+        this.#database.updateFleetBaseUrl(fleetBaseUrl);
+      }
+    } catch {
+      // The configured base URL is used if the nonessential region lookup is unavailable.
+    }
+    return this.#tesla.getOrders(accessToken, fleetBaseUrl);
+  }
+
+  async #getValidAccessToken(): Promise<string> {
+    const stored = this.#database.loadTeslaTokens();
+    if (!stored) throw new Error("Tesla authorization is not configured");
+    if (stored.accessExpiresAt - Date.now() > 60_000) {
+      return stored.accessToken;
+    }
+
+    if (!this.#refreshInFlight) {
+      this.#refreshInFlight = this.#refresh(stored).finally(() => {
+        this.#refreshInFlight = null;
+      });
+    }
+    return this.#refreshInFlight;
+  }
+
+  async #refresh(stored: NonNullable<ReturnType<OrderPulseDatabase["loadTeslaTokens"]>>): Promise<string> {
+    const refreshed = await this.#tesla.refresh(stored.refreshToken);
+    const tokens = {
+      ...refreshed,
+      scope: refreshed.scope ?? stored.scopes,
+    };
+    this.#database.saveTeslaTokens({
+      tokens,
+      previousRefreshToken: stored.refreshToken,
+      fleetBaseUrl: stored.fleetBaseUrl,
+      subject: stored.subject,
+    });
+    return tokens.access_token;
+  }
+}
