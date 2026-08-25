@@ -9,6 +9,14 @@ function notificationText(event: OrderEvent): { title: string; body: string } {
   if (event.type === "order_reappeared") {
     return { title: "订单重新出现", body: "这笔订单已重新出现在 Tesla 活跃订单中。" };
   }
+  if (event.type === "configuration_changed" && event.notificationEligible) {
+    const current = event.currentSubstatus;
+    const previous = event.previousSubstatus;
+    if (current && previous && current !== previous) {
+      return { title: "Tesla 交付信息更新", body: `${previous} → ${current}` };
+    }
+    return { title: "Tesla 交付信息更新", body: current ?? "交付详情发生了变化。" };
+  }
   const current = event.currentSubstatus ?? event.currentStatus;
   const previous = event.previousSubstatus ?? event.previousStatus;
   if (current && previous) {

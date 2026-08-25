@@ -1,3 +1,5 @@
+import type { OrderDeliveryDetails } from "./types.js";
+
 export type OrderEventType =
   | "baseline_created"
   | "status_changed"
@@ -15,6 +17,7 @@ export interface TrackedOrder {
   orderSubstatus: string | null;
   modelCode: string | null;
   marketOptions: string[];
+  delivery: OrderDeliveryDetails | null;
 }
 
 export interface OrderSnapshot {
@@ -24,6 +27,7 @@ export interface OrderSnapshot {
   orderSubstatus: string | null;
   modelCode: string | null;
   marketOptions: string[];
+  delivery: OrderDeliveryDetails | null;
   firstSeenAt: number;
   lastSeenAt: number;
   lastChangedAt: number;

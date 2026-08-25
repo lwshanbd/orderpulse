@@ -6,6 +6,8 @@ import { OrderPulseDatabase } from "./database.js";
 import { OrderIdentity } from "./order-identity.js";
 import { OrderMonitor } from "./order-monitor.js";
 import { NotificationDispatcher } from "./notification-dispatcher.js";
+import { OwnerTeslaClient } from "./owner-api.js";
+import { OwnerTokenService, PreferredOrderProvider } from "./owner-service.js";
 import { TeslaClient } from "./tesla.js";
 import { TeslaTokenService } from "./token-service.js";
 
@@ -13,13 +15,19 @@ const config = loadConfig();
 const database = new OrderPulseDatabase(config.databasePath, new SecretBox(config.tokenEncryptionKey));
 const tesla = new TeslaClient(config);
 const tokenService = new TeslaTokenService(database, tesla);
+const ownerService = new OwnerTokenService(
+  database,
+  new OwnerTeslaClient(config.requestTimeoutMs),
+  config.ownerAuthorizationTtlSeconds,
+);
+const orderProvider = new PreferredOrderProvider(ownerService, tokenService);
 const notifications = new NotificationDispatcher(
   database,
   config.apnsEnabled ? new ApnsClient(config) : null,
 );
 const orderMonitor = new OrderMonitor({
   database,
-  tokenService,
+  tokenService: orderProvider,
   identity: new OrderIdentity(config.tokenEncryptionKey),
   enabled: config.orderPollingEnabled,
   intervalSeconds: config.orderPollingIntervalSeconds,
@@ -35,6 +43,7 @@ const app = createApp({
   orderMonitor,
   mobileCredentials: new MobileCredentials(config.tokenEncryptionKey),
   notifications,
+  ownerService,
 });
 
 let shuttingDown = false;

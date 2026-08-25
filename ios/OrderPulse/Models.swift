@@ -8,6 +8,7 @@ struct PairResponse: Decodable {
 struct BootstrapResponse: Decodable {
     let serverTime: String
     let apnsEnabled: Bool
+    let ownerAuthorized: Bool?
     let orders: [OrderSnapshot]
     let events: [OrderEvent]
     let polling: PollingStatus
@@ -20,6 +21,7 @@ struct OrderSnapshot: Decodable, Identifiable, Equatable {
     let orderSubstatus: String?
     let modelCode: String?
     let marketOptions: [String]
+    let delivery: DeliveryDetails?
     let firstSeenAt: String?
     let lastSeenAt: String?
     let lastChangedAt: String?
@@ -29,6 +31,53 @@ struct OrderSnapshot: Decodable, Identifiable, Equatable {
     var id: String { orderId }
     var primaryStatus: String { orderSubstatus ?? orderStatus ?? "等待 Tesla 更新" }
     var isActive: Bool { inactiveAt == nil }
+
+    var modelName: String {
+        switch modelCode?.uppercased() {
+        case "S", "MS": "Model S"
+        case "3", "M3": "Model 3"
+        case "X", "MX": "Model X"
+        case "Y", "MY": "Model Y"
+        case "CT", "CYBERTRUCK": "Cybertruck"
+        default: modelCode?.uppercased() ?? "Tesla"
+        }
+    }
+}
+
+struct DeliveryDetails: Decodable, Equatable {
+    let vin: String?
+    let vinAssigned: Bool
+    let deliveryWindow: String?
+    let appointment: String?
+    let etaToDeliveryCenter: String?
+    let vehicleLocation: String?
+    let deliveryMethod: String?
+    let deliveryCenter: String?
+    let odometer: Double?
+    let odometerUnit: String?
+    let reservationDate: String?
+    let orderBookedDate: String?
+    let licensePlate: String?
+    let financingComplete: Bool?
+    let deliveryAgentAssigned: Bool?
+    let pendingTaskCount: Int
+    let totalTaskCount: Int
+    let tasks: [OrderTaskSummary]
+
+    var hasUsefulData: Bool {
+        vinAssigned || deliveryWindow != nil || appointment != nil ||
+        etaToDeliveryCenter != nil || deliveryMethod != nil ||
+        deliveryCenter != nil || !tasks.isEmpty
+    }
+}
+
+struct OrderTaskSummary: Decodable, Identifiable, Equatable {
+    let id: String
+    let title: String
+    let complete: Bool
+    let enabled: Bool
+    let required: Bool
+    let order: Double?
 }
 
 struct OrderEvent: Decodable, Identifiable, Equatable {

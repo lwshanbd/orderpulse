@@ -1,6 +1,6 @@
 # OrderPulse Service
 
-这是运行在 NAS 上的 OrderPulse 后台和配套 iOS App：完成 Tesla 用户 OAuth、加密保存和自动刷新 token、读取订单、建立隐私安全的状态快照，并把状态变化通过 APNs 发到已配对的 iPhone。
+这是运行在 NAS 上的 OrderPulse 后台和配套 iOS App：读取你自己的 Tesla 订单及交付详情、建立隐私安全的状态快照，并把状态变化通过 APNs 发到已配对的 iPhone。所有功能只围绕实际订单，不包含社区预测或其他用户数据。
 
 ## 已实现
 
@@ -8,15 +8,18 @@
 - `GET /.well-known/appspecific/com.tesla.3p.public-key.pem`：继续提供 Tesla 已登记的公钥。
 - `GET /oauth/tesla/start`：管理员登录后开始 Tesla 授权。
 - `GET /oauth/tesla/callback`：Tesla 回调；校验一次性 state、OIDC issuer/audience/nonce。
-- `GET /api/status`：只返回授权是否存在、有效期、scope 和 Fleet 区域。
-- `GET /api/orders`：立即调用 Tesla、更新快照，并只返回脱敏订单。这个请求可能产生 Tesla 计费使用量。
+- `GET /oauth/owner/start`：管理员开始个人 Owner PKCE 授权，用于读取 Tesla 自有 App 的交付详情。
+- `POST /oauth/owner/complete`：提交 Tesla 最终回调地址；校验一次性 state 后加密保存 Owner token。
+- `GET /api/status`：只返回两套授权是否存在、有效期、scope 和 Fleet 区域。
+- `GET /api/orders`：立即调用 Tesla、更新快照，并只返回脱敏订单；已连接 Owner 时同时读取交付详情。
 - `GET /api/orders/schema`：返回原始响应的字段路径和数据类型，不返回字段值。这个接口用于第一次适配真实 Tesla 响应。
-- `GET /api/order-details/schema`：手动探测 Tesla 未公开的 delivery API，只返回字段路径和类型，不返回订单值；不会被后台轮询调用。
+- `GET /api/order-details/schema`：使用 Owner 授权检查 Tesla 未公开 delivery API 的字段结构，只返回路径和类型，不返回订单值。
 - `GET /api/order-state`：只读 SQLite 中的最新快照，不调用 Tesla。
 - `GET /api/events?limit=50`：只读状态变化历史，不调用 Tesla。
 - `GET /api/polling/status`：返回调度配置、下次运行时间和最近一次结果。
 - `POST /api/polling/run`：手动执行一次查询与变化检测。
 - `DELETE /api/authorization`：删除 NAS 上保存的 Tesla 授权。
+- `DELETE /api/owner-authorization`：删除 NAS 上保存的个人 Owner 授权。
 - `POST /api/devices/pairing-code`：管理员生成 1 小时有效、只能使用一次的 iPhone 配对码。
 - `GET /api/devices`：管理员查看已配对设备和推送状态，不返回设备凭证或 APNs token。
 - `DELETE /api/devices/:id`：管理员撤销一台设备。
@@ -26,7 +29,7 @@
 - `PUT /api/mobile/device-token`：已配对设备上传最新 APNs token。
 - `DELETE /api/mobile/device`：iOS App 撤销自己的设备凭证。
 
-管理接口受 HTTPS Basic Auth 保护；移动端接口使用每台设备独立的 Bearer 凭证。App 不保存管理员密码、Tesla access token 或 refresh token。设备凭证只保存在 iOS Keychain；NAS 只保存它的 HMAC，APNs device token 使用 AES-256-GCM 加密保存。
+管理接口受 HTTPS Basic Auth 保护；移动端接口使用每台设备独立的 Bearer 凭证。App 不保存管理员密码或任何 Tesla token。两套 Tesla token 都经 AES-256-GCM 加密保存在 NAS；设备凭证只保存在 iOS Keychain，NAS 只保存它的 HMAC，APNs device token 也加密保存。
 
 Tesla 当前订单字段与预计交付日期的边界见 [`docs/order-fields.md`](docs/order-fields.md)。
 
@@ -59,14 +62,15 @@ npm run build
 
 - 完整 RN 永远不写入快照表。`orderId` 是用独立派生密钥计算的 HMAC，界面只得到 RN 末 4 位。
 - 第一次成功查询创建 `baseline_created`，不具备通知资格。
+- 从 Fleet 基础字段升级到 Owner 交付详情时只补充静默基线，不制造提醒。
 - `orderStatus` 或 `orderSubstatus` 变化时创建一次 `status_changed`。
-- 配置代码变化会记录 `configuration_changed`，但默认不用于推送。
+- 交付窗口、预约、VIN 分配、交付地点/方式、顾问或 App 任务等白名单详情变化时创建可推送的 `configuration_changed`；普通车型配置变化仍只记录、不推送。
 - active orders 列表连续三次没有某个订单后才创建 `order_inactive`，避免把短暂空响应误判为交付或取消。
 - inactive 订单重新出现时创建 `order_reappeared`。
 - 查询失败只记录安全错误码，不修改订单快照，也不会制造事件。
 - 同一进程中的并发手动/定时查询会共享一次 Tesla 请求。
 
-正常订单查询不再重复调用 `/users/region`；区域只在 OAuth 时检测，或 Tesla 明确返回区域错误时重新检测。401 会刷新 rotating refresh token 并只重试一次。
+已连接 Owner 时，每轮先读取一次活跃订单，再按订单顺序读取详情，避免并发放大 429；401 会刷新 Owner refresh token 并只重试一次。未连接 Owner 时仍使用官方 Fleet 订单接口作为基础字段后备。Fleet 查询不再重复调用 `/users/region`；区域只在 OAuth 时检测，或 Tesla 明确返回区域错误时重新检测。
 
 ## NAS 部署目录
 
@@ -151,7 +155,7 @@ xcodegen generate --spec project.yml
 
 ## 启用定时轮询
 
-Tesla Fleet API 按使用量计费，所有低于 HTTP 500 的请求通常都会计入使用量。先在 Tesla Developer Dashboard 设置支付方式、较低的 Billing Limit，并查看当前 pricing category。OrderPulse 默认关闭后台轮询，避免一次部署意外产生持续费用。
+Tesla Fleet API 按使用量计费，所有低于 HTTP 500 的请求通常都会计入使用量。先在 Tesla Developer Dashboard 设置支付方式、较低的 Billing Limit，并查看当前 pricing category。Owner 详情接口本身未公开，也应保持低频。OrderPulse 默认关闭后台轮询，避免部署后意外持续调用。
 
 部署新版本后，先手动建立基线；`curl -u orderpulse` 会交互式询问密码，不要把密码写进命令参数：
 
@@ -170,7 +174,7 @@ ORDER_POLL_JITTER_SECONDS=60
 ORDER_MISSING_THRESHOLD=3
 ```
 
-再执行 `docker compose up -d`。默认每 30 分钟查询一次，并加入最多 60 秒随机抖动；失败时指数退避，最长六小时，Tesla 返回 `Retry-After` 时也会遵守。可以通过 `/api/polling/status` 检查运行情况。
+再执行 `docker compose up -d`。默认每 30 分钟查询一次，并加入最多 60 秒随机抖动；失败时指数退避，最长六小时，Tesla 返回 `Retry-After` 时也会遵守。一次 Owner 轮询会产生一次订单请求和每笔活跃订单一次详情请求，这些请求按顺序发送。可以通过 `/api/polling/status` 检查运行情况。
 
 ## Synology 反向代理
 
@@ -190,7 +194,7 @@ curl -fsS https://orderpulse.baodishan.com/.well-known/appspecific/com.tesla.3p.
 
 预期第一个响应是 `{"status":"ok"}`，第二个仍是已经向 Tesla 注册的 P-256 公钥。
 
-## 第一次真实授权
+## 第一次 Fleet 授权
 
 浏览器打开：
 
@@ -202,7 +206,19 @@ curl -fsS https://orderpulse.baodishan.com/.well-known/appspecific/com.tesla.3p.
 - `https://orderpulse.baodishan.com/api/orders`
 - `https://orderpulse.baodishan.com/api/orders/schema`
 
-请只把 `/api/orders/schema` 的输出发给开发端；不要发送 OAuth callback URL、Client Secret、数据库、完整 `/api/orders` 原始响应、access token 或 refresh token。`schema` 只有字段名和类型，适合下一步设计订单状态快照和 APNs 提醒。
+不要发送 OAuth callback URL、Client Secret、数据库、完整 `/api/orders` 原始响应、access token 或 refresh token。
+
+## 连接个人订单详情
+
+Fleet 授权可以读取基础订单状态，但预计交付窗口等信息位于 Tesla 自有 App 使用的另一套未公开接口。个人自用部署可再打开：
+
+`https://orderpulse.baodishan.com/oauth/owner/start`
+
+输入管理员 Basic Auth 后，按页面说明在 Tesla 官方页面登录。Tesla 最后会停在空白页；把地址栏中以 `https://auth.tesla.com/void/callback` 开头的完整地址复制回 OrderPulse 页面提交。这个流程可在一小时内完成；NAS 只接收一次性授权码，不会看到 Tesla 密码或 MFA。
+
+成功后检查 `/api/status` 的 `ownerAuthorized` 为 `true`，然后手动执行一次 `/api/polling/run`。第一次只建立交付详情基线，不推送；此后交付窗口、预约、VIN 分配、地点、顾问和 Tesla App 任务状态发生变化才提醒。iOS App 会直接显示这些字段。
+
+这套 Owner 接口不是 Tesla Fleet API 的正式合约，Tesla 将来可能修改或关闭它。OrderPulse 对 Owner 登录和查询使用 HTTP/2，固定只向 Tesla 域名发送请求，并且查询阶段只有 GET；只保存白名单字段，请求失败时保留最后一次成功快照，不会伪造状态变化。
 
 ## 备份与恢复
 

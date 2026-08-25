@@ -1,0 +1,198 @@
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import { SecretBox } from "../src/crypto.js";
+import { OrderPulseDatabase } from "../src/database.js";
+import {
+  extractOrderDeliveryDetails,
+  ownerCodeChallenge,
+  OwnerTeslaClient,
+} from "../src/owner-api.js";
+import { OwnerTokenService } from "../src/owner-service.js";
+import type {
+  OwnerGateway,
+  TeslaOrder,
+  TeslaTokenResponse,
+} from "../src/types.js";
+
+class FakeOwner implements OwnerGateway {
+  state: string | null = null;
+  codeChallenge: string | null = null;
+  exchangedVerifier: string | null = null;
+
+  buildAuthorizationUrl(input: { state: string; codeChallenge: string }): URL {
+    this.state = input.state;
+    this.codeChallenge = input.codeChallenge;
+    const url = new URL("https://auth.tesla.com/oauth2/v3/authorize");
+    url.searchParams.set("state", input.state);
+    return url;
+  }
+
+  async exchangeAuthorizationCode(input: {
+    code: string;
+    codeVerifier: string;
+  }): Promise<TeslaTokenResponse> {
+    assert.equal(input.code, "owner-code");
+    this.exchangedVerifier = input.codeVerifier;
+    return {
+      access_token: "owner-access",
+      refresh_token: "owner-refresh",
+      token_type: "Bearer",
+      expires_in: 3_600,
+      scope: "openid email offline_access",
+    };
+  }
+
+  async refresh(): Promise<TeslaTokenResponse> {
+    throw new Error("not used");
+  }
+
+  async getOrders(): Promise<TeslaOrder[]> {
+    return [{
+      referenceNumber: "RN123456789",
+      orderStatus: "BOOKED",
+      modelCode: "MY",
+      vin: "7SAYGDEE9NF123456",
+      countryCode: "US",
+    }];
+  }
+
+  async getOrderDetails(
+    _accessToken: string,
+    referenceNumber: string,
+    countryCode?: string,
+  ): Promise<unknown> {
+    assert.equal(referenceNumber, "RN123456789");
+    assert.equal(countryCode, "US");
+    return {
+      tasks: {
+        financing: {
+          id: "financing",
+          complete: true,
+          enabled: true,
+          required: true,
+          order: 1,
+          card: { title: "Financing" },
+        },
+        scheduling: {
+          id: "scheduling",
+          complete: false,
+          enabled: true,
+          required: true,
+          order: 2,
+          card: { title: "Schedule delivery" },
+          deliveryWindowDisplay: "September 13 - September 30",
+          deliveryType: "PICKUP_SERVICE_CENTER",
+          deliveryAddressTitle: "Smithtown",
+        },
+        finalPayment: { data: { etaToDeliveryCenter: "2026-09-10T00:00:00Z" } },
+        isDeliveryAgentAssigned: true,
+      },
+    };
+  }
+}
+
+test("Owner PKCE authorization is one-time and enriches orders without exposing identifiers", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "orderpulse-owner-"));
+  const database = new OrderPulseDatabase(
+    join(directory, "orderpulse.sqlite"),
+    new SecretBox(randomBytes(32)),
+  );
+  const gateway = new FakeOwner();
+  const service = new OwnerTokenService(database, gateway, 600);
+
+  service.beginAuthorization();
+  assert.ok(gateway.state?.startsWith("owner_"));
+  assert.ok(gateway.codeChallenge);
+  await service.completeAuthorization(
+    `https://auth.tesla.com/void/callback?code=owner-code&state=${encodeURIComponent(gateway.state ?? "")}`,
+  );
+  assert.equal(ownerCodeChallenge(gateway.exchangedVerifier ?? ""), gateway.codeChallenge);
+  assert.equal(service.authorized, true);
+
+  const orders = await service.getOrders();
+  const delivery = orders[0]?.orderPulseDelivery;
+  assert.equal(delivery?.deliveryWindow, "September 13 - September 30");
+  assert.equal(delivery?.deliveryCenter, "Smithtown");
+  assert.equal(delivery?.financingComplete, true);
+  assert.equal(delivery?.pendingTaskCount, 1);
+  assert.equal(delivery?.vin, "•••••••••••123456");
+  assert.doesNotMatch(JSON.stringify(delivery), /7SAYGDEE9NF123456|RN123456789/);
+
+  await assert.rejects(
+    () => service.completeAuthorization(
+      `https://auth.tesla.com/void/callback?code=owner-code&state=${encodeURIComponent(gateway.state ?? "")}`,
+    ),
+    /already used/,
+  );
+  database.close();
+});
+
+test("delivery extraction keeps only a small task summary allowlist", () => {
+  const delivery = extractOrderDeliveryDetails(
+    { referenceNumber: "RN1", vin: "7SAYGDEE9NF123456" },
+    {
+      tasks: {
+        scheduling: {
+          id: "scheduling",
+          complete: false,
+          enabled: true,
+          required: true,
+          order: 5,
+          target: "https://private.example/account",
+          card: {
+            title: "Schedule delivery",
+            messageBody: "private free-form message",
+          },
+          deliveryWindowDisplay: "September 13 - September 30",
+          apptDateTimeAddressStr: "September 20, 2026 - Smithtown",
+        },
+      },
+    },
+  );
+  const serialized = JSON.stringify(delivery);
+  assert.match(serialized, /Schedule delivery|September 13/);
+  assert.doesNotMatch(serialized, /private free-form message|private\.example|7SAYGDEE9NF123456/);
+});
+
+test("Owner client uses PKCE form exchange and fixed Tesla detail endpoint", async () => {
+  const requests: Array<{ url: string; init: RequestInit | undefined }> = [];
+  const fakeFetch: typeof fetch = async (input, init) => {
+    requests.push({ url: input.toString(), init });
+    if (input.toString().includes("/token")) {
+      return new Response(JSON.stringify({
+        access_token: "access",
+        refresh_token: "refresh",
+        token_type: "Bearer",
+        expires_in: 3_600,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ tasks: {} }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new OwnerTeslaClient(1_000, fakeFetch);
+
+  await client.exchangeAuthorizationCode({ code: "one-time-code", codeVerifier: "verifier" });
+  await client.getOrderDetails("access", "RN1234", "us");
+
+  assert.equal(requests[0]?.url, "https://auth.tesla.com/oauth2/v3/token");
+  assert.equal(
+    new Headers(requests[0]?.init?.headers).get("content-type"),
+    "application/x-www-form-urlencoded",
+  );
+  const tokenBody = new URLSearchParams(requests[0]?.init?.body?.toString());
+  assert.equal(tokenBody.get("client_id"), "ownerapi");
+  assert.equal(tokenBody.get("code_verifier"), "verifier");
+
+  const detailUrl = new URL(requests[1]?.url ?? "https://invalid");
+  assert.equal(detailUrl.origin, "https://akamai-apigateway-vfx.tesla.com");
+  assert.equal(detailUrl.pathname, "/tasks");
+  assert.equal(detailUrl.searchParams.get("referenceNumber"), "RN1234");
+  assert.equal(detailUrl.searchParams.get("deviceCountry"), "US");
+});

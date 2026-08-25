@@ -158,31 +158,176 @@ private struct OrderCard: View {
     let order: OrderSnapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(order.modelCode?.uppercased() ?? "TESLA")
-                        .font(.caption.weight(.bold))
+                    Text(order.modelName)
+                        .font(.title.bold())
+                    Text(order.referenceNumber ?? "订单号已隐藏")
+                        .font(.subheadline.monospaced())
                         .foregroundStyle(.secondary)
-                    Text(order.primaryStatus.orderPulseDisplayCode)
-                        .font(.title2.bold())
                 }
                 Spacer()
-                Text(order.isActive ? "进行中" : "暂未出现")
+                Text(order.orderStatus?.orderPulseDisplayCode ?? (order.isActive ? "进行中" : "暂未出现"))
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(order.isActive ? Color.green.opacity(0.14) : Color.orange.opacity(0.14), in: Capsule())
+                    .foregroundStyle(order.isActive ? .blue : .orange)
+                    .background(order.isActive ? Color.blue.opacity(0.12) : Color.orange.opacity(0.14), in: Capsule())
             }
-            Divider()
-            LabeledContent("订单", value: order.referenceNumber ?? "已隐藏")
-            LabeledContent("主状态", value: order.orderStatus?.orderPulseDisplayCode ?? "—")
-            LabeledContent("最近确认", value: DateText.display(order.lastSeenAt))
-            LabeledContent("最近变化", value: DateText.display(order.lastChangedAt))
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("订单进度")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                OrderProgressView(order: order)
+            }
+
+            if let details = order.delivery, details.hasUsefulData {
+                Divider()
+                DeliveryDetailsView(details: details)
+            } else {
+                Label("等待 Owner API 建立交付详情基线", systemImage: "hourglass")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Label(DateText.display(order.lastSeenAt), systemImage: "arrow.clockwise")
+                Spacer()
+                Text("变化：\(DateText.display(order.lastChangedAt))")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
         .padding(18)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
         .accessibilityElement(children: .contain)
+    }
+}
+
+private struct OrderProgressView: View {
+    let order: OrderSnapshot
+
+    private var steps: [(String, String, Bool)] {
+        let details = order.delivery
+        return [
+            ("下单", "doc.text.fill", true),
+            ("融资", "creditcard.fill", details?.financingComplete == true),
+            ("VIN", "key.fill", details?.vinAssigned == true),
+            ("预约", "calendar.badge.checkmark", details?.appointment != nil),
+        ]
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 4) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                VStack(spacing: 7) {
+                    Image(systemName: step.1)
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                        .foregroundStyle(step.2 ? .white : .secondary)
+                        .background(step.2 ? Color.blue : Color(uiColor: .tertiarySystemFill), in: Circle())
+                    Text(step.0)
+                        .font(.caption2.weight(step.2 ? .semibold : .regular))
+                        .foregroundStyle(step.2 ? .primary : .secondary)
+                }
+                .frame(maxWidth: .infinity)
+                if index < steps.count - 1 {
+                    Rectangle()
+                        .fill(step.2 && steps[index + 1].2 ? Color.blue : Color(uiColor: .separator))
+                        .frame(height: 2)
+                        .padding(.top, 17)
+                        .frame(maxWidth: 22)
+                }
+            }
+        }
+    }
+}
+
+private struct DeliveryDetailsView: View {
+    let details: DeliveryDetails
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("交付详情")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+
+            if let method = details.deliveryMethod {
+                DetailRow(icon: "shippingbox.fill", label: "方式", value: method.orderPulseDisplayCode, color: .blue)
+            }
+            if let center = details.deliveryCenter {
+                DetailRow(icon: "mappin.and.ellipse", label: "地点", value: center, color: .red)
+            }
+            if let window = details.deliveryWindow {
+                DetailRow(icon: "calendar", label: "预计窗口", value: window, color: .purple)
+            }
+            if let appointment = details.appointment {
+                DetailRow(icon: "calendar.badge.checkmark", label: "交付预约", value: appointment, color: .green)
+            }
+            if let eta = details.etaToDeliveryCenter {
+                DetailRow(icon: "truck.box.fill", label: "到店 ETA", value: DateText.display(eta), color: .orange)
+            }
+            if let location = details.vehicleLocation {
+                DetailRow(icon: "location.fill", label: "车辆位置", value: location, color: .indigo)
+            }
+            if details.vinAssigned {
+                DetailRow(icon: "key.fill", label: "VIN", value: details.vin ?? "已分配", color: .mint)
+            }
+            if let assigned = details.deliveryAgentAssigned {
+                DetailRow(icon: "person.crop.circle.badge.checkmark", label: "交付顾问", value: assigned ? "已分配" : "尚未分配", color: .teal)
+            }
+
+            if !details.tasks.isEmpty {
+                Divider()
+                HStack {
+                    Label("Tesla App 任务", systemImage: "checklist")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text("\(details.pendingTaskCount) 项待完成")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(details.tasks.prefix(8)) { task in
+                    HStack(spacing: 10) {
+                        Image(systemName: task.complete ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(task.complete ? .green : (task.enabled ? .blue : .secondary))
+                        Text(task.title)
+                            .font(.subheadline)
+                            .foregroundStyle(task.enabled || task.complete ? .primary : .secondary)
+                        Spacer()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct DetailRow: View {
+    let icon: String
+    let label: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(color)
+                .frame(width: 32, height: 32)
+                .background(color.opacity(0.12), in: Circle())
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.subheadline.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
     }
 }
 
@@ -216,7 +361,7 @@ private struct EventRow: View {
         switch event.type {
         case "baseline_created": "开始追踪"
         case "status_changed": "订单状态更新"
-        case "configuration_changed": "车辆配置更新"
+        case "configuration_changed": event.notificationEligible ? "交付信息更新" : "车辆配置更新"
         case "order_inactive": "订单暂未出现在列表"
         case "order_reappeared": "订单重新出现"
         default: "订单信息更新"
@@ -242,6 +387,7 @@ private struct SettingsView: View {
             Form {
                 Section("后台") {
                     LabeledContent("地址", value: "orderpulse.baodishan.com")
+                    LabeledContent("交付详情", value: model.bootstrap?.ownerAuthorized == true ? "已连接" : "尚未连接")
                     LabeledContent("通知", value: model.notificationStatus)
                     Button("重新申请通知权限") { Task { await model.enableNotifications() } }
                 }

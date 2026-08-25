@@ -40,10 +40,20 @@ test("database stores OAuth nonces and Tesla tokens as ciphertext", () => {
     fleetBaseUrl: "https://fleet-api.prd.na.vn.cloud.tesla.com",
     subject: "subject",
   });
+  database.saveOwnerTokens({
+    tokens: {
+      access_token: "plain-owner-access-token",
+      refresh_token: "plain-owner-refresh-token",
+      token_type: "Bearer",
+      expires_in: 3_600,
+      scope: "openid email offline_access",
+    },
+  });
 
   const stored = database.loadTeslaTokens();
   assert.equal(stored?.accessToken, "plain-access-token");
   assert.equal(stored?.refreshToken, "plain-refresh-token");
+  assert.equal(database.loadOwnerTokens()?.accessToken, "plain-owner-access-token");
   database.close();
 
   const rawDatabase = new DatabaseSync(databasePath, { readOnly: true });
@@ -53,13 +63,19 @@ test("database stores OAuth nonces and Tesla tokens as ciphertext", () => {
   const tokenRow = rawDatabase
     .prepare("SELECT access_ciphertext, refresh_ciphertext FROM tesla_tokens")
     .get() as { access_ciphertext: string; refresh_ciphertext: string } | undefined;
+  const ownerTokenRow = rawDatabase
+    .prepare("SELECT access_ciphertext, refresh_ciphertext FROM owner_tokens")
+    .get() as { access_ciphertext: string; refresh_ciphertext: string } | undefined;
   rawDatabase.close();
 
   assert.ok(oauthRow);
   assert.ok(tokenRow);
+  assert.ok(ownerTokenRow);
   assert.doesNotMatch(oauthRow.nonce_ciphertext, /nonce-value/);
   assert.doesNotMatch(tokenRow.access_ciphertext, /plain-access-token/);
   assert.doesNotMatch(tokenRow.refresh_ciphertext, /plain-refresh-token/);
+  assert.doesNotMatch(ownerTokenRow.access_ciphertext, /plain-owner-access-token/);
+  assert.doesNotMatch(ownerTokenRow.refresh_ciphertext, /plain-owner-refresh-token/);
 });
 
 test("OAuth state is one-time and expires", () => {
@@ -124,5 +140,36 @@ test("opening a first-stage database preserves authorization and adds order tabl
   assert.equal(migrated.loadTeslaTokens()?.accessToken, "existing-access");
   assert.deepEqual(migrated.listOrderSnapshots(), []);
   assert.deepEqual(migrated.listOrderEvents(), []);
+  migrated.close();
+});
+
+test("opening the previous order schema adds the delivery details column in place", () => {
+  const directory = mkdtempSync(join(tmpdir(), "orderpulse-delivery-migration-"));
+  const databasePath = join(directory, "orderpulse.sqlite");
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`
+    CREATE TABLE order_snapshots (
+      order_key TEXT PRIMARY KEY,
+      reference_suffix TEXT,
+      order_status TEXT,
+      order_substatus TEXT,
+      model_code TEXT,
+      market_options_json TEXT NOT NULL,
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      last_changed_at INTEGER NOT NULL,
+      missing_count INTEGER NOT NULL DEFAULT 0 CHECK (missing_count >= 0),
+      inactive_at INTEGER
+    ) STRICT;
+    INSERT INTO order_snapshots VALUES (
+      'existing-order', '1234', 'BOOKED', NULL, 'MY', '[]', 1, 1, 1, 0, NULL
+    );
+  `);
+  legacy.close();
+
+  const migrated = new OrderPulseDatabase(databasePath, new SecretBox(randomBytes(32)));
+  const snapshot = migrated.listOrderSnapshots()[0];
+  assert.equal(snapshot?.orderId, "existing-order");
+  assert.equal(snapshot?.delivery, null);
   migrated.close();
 });

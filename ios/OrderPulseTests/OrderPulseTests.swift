@@ -10,6 +10,7 @@ final class OrderPulseTests: XCTestCase {
             orderSubstatus: "AWAITING_VIN",
             modelCode: "MY",
             marketOptions: [],
+            delivery: nil,
             firstSeenAt: nil,
             lastSeenAt: nil,
             lastChangedAt: nil,
@@ -25,6 +26,7 @@ final class OrderPulseTests: XCTestCase {
         {
           "serverTime":"2026-08-25T20:45:00.000Z",
           "apnsEnabled":false,
+          "ownerAuthorized":true,
           "orders":[],
           "events":[],
           "polling":{"enabled":true,"inProgress":false,"nextPollAt":null,"latestRun":null}
@@ -33,5 +35,6 @@ final class OrderPulseTests: XCTestCase {
         let response = try JSONDecoder().decode(BootstrapResponse.self, from: data)
         XCTAssertTrue(response.polling.enabled)
         XCTAssertFalse(response.apnsEnabled)
+        XCTAssertEqual(response.ownerAuthorized, true)
     }
 }

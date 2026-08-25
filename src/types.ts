@@ -18,6 +18,15 @@ export interface StoredTeslaTokens {
   updatedAt: number;
 }
 
+export interface StoredOwnerTokens {
+  accessToken: string;
+  refreshToken: string;
+  tokenType: string;
+  accessExpiresAt: number;
+  scopes: string;
+  updatedAt: number;
+}
+
 export interface OAuthTransaction {
   state: string;
   nonce: string;
@@ -32,6 +41,37 @@ export interface TeslaOrder extends Record<string, unknown> {
   vin?: string;
   mktOptions?: string | string[];
   countryCode?: string;
+  orderPulseDelivery?: OrderDeliveryDetails;
+}
+
+export interface OrderTaskSummary {
+  id: string;
+  title: string;
+  complete: boolean;
+  enabled: boolean;
+  required: boolean;
+  order: number | null;
+}
+
+export interface OrderDeliveryDetails {
+  vin: string | null;
+  vinAssigned: boolean;
+  deliveryWindow: string | null;
+  appointment: string | null;
+  etaToDeliveryCenter: string | null;
+  vehicleLocation: string | null;
+  deliveryMethod: string | null;
+  deliveryCenter: string | null;
+  odometer: number | null;
+  odometerUnit: string | null;
+  reservationDate: string | null;
+  orderBookedDate: string | null;
+  licensePlate: string | null;
+  financingComplete: boolean | null;
+  deliveryAgentAssigned: boolean | null;
+  pendingTaskCount: number;
+  totalTaskCount: number;
+  tasks: OrderTaskSummary[];
 }
 
 export interface TeslaRegionResult {
@@ -53,4 +93,19 @@ export interface TeslaGateway {
     countryCode?: string,
   ): Promise<unknown>;
   refresh(refreshToken: string): Promise<TeslaTokenResponse>;
+}
+
+export interface OwnerGateway {
+  buildAuthorizationUrl(input: { state: string; codeChallenge: string }): URL;
+  exchangeAuthorizationCode(input: {
+    code: string;
+    codeVerifier: string;
+  }): Promise<TeslaTokenResponse>;
+  refresh(refreshToken: string): Promise<TeslaTokenResponse>;
+  getOrders(accessToken: string): Promise<TeslaOrder[]>;
+  getOrderDetails(
+    accessToken: string,
+    referenceNumber: string,
+    countryCode?: string,
+  ): Promise<unknown>;
 }

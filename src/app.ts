@@ -12,6 +12,7 @@ import { MobileCredentials, randomBase64Url, safeEqual } from "./crypto.js";
 import type { OrderPulseDatabase } from "./database.js";
 import type { MobileDevice } from "./mobile-types.js";
 import type { NotificationDispatcher } from "./notification-dispatcher.js";
+import type { OwnerTokenService } from "./owner-service.js";
 import type { OrderMonitor } from "./order-monitor.js";
 import type { OrderEvent, OrderSnapshot, PollRun } from "./order-types.js";
 import { describeShape, sanitizeOrder } from "./redact.js";
@@ -28,6 +29,7 @@ interface AppDependencies {
   orderMonitor: OrderMonitor;
   mobileCredentials?: MobileCredentials;
   notifications?: NotificationDispatcher;
+  ownerService?: OwnerTokenService;
 }
 
 interface CallbackQuery {
@@ -65,6 +67,9 @@ const pushTokenSchema = z.object({
   token: z.string().regex(/^[A-Fa-f0-9]{64,400}$/),
   environment: z.enum(["sandbox", "production"]),
 });
+const ownerCallbackSchema = z.object({
+  callbackUrl: z.string().trim().url().max(8_192),
+});
 
 function htmlPage(title: string, message: string): string {
   const escapedTitle = escapeHtml(title);
@@ -84,6 +89,42 @@ function htmlPage(title: string, message: string): string {
     </style>
   </head>
   <body><main><h1>${escapedTitle}</h1><p>${escapedMessage}</p></main></body>
+</html>`;
+}
+
+function ownerAuthorizationPage(authorizationUrl: URL): string {
+  const safeUrl = escapeHtml(authorizationUrl.toString());
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>连接 Tesla 订单详情</title>
+    <style>
+      :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+      body { margin: 0; display: grid; min-height: 100vh; place-items: center; background: #101114; }
+      main { width: min(38rem, calc(100% - 3rem)); padding: 2rem; border-radius: 1rem; background: #1b1d22; box-shadow: 0 1rem 3rem #0006; }
+      h1 { margin-top: 0; font-size: 1.5rem; }
+      p, li { line-height: 1.55; color: #c9cbd1; }
+      a, button { display: inline-block; border: 0; border-radius: .7rem; padding: .8rem 1rem; background: #e82127; color: white; font: inherit; font-weight: 650; text-decoration: none; cursor: pointer; }
+      input { box-sizing: border-box; width: 100%; margin: .7rem 0 1rem; border: 1px solid #666; border-radius: .7rem; padding: .8rem; font: inherit; }
+      code { overflow-wrap: anywhere; }
+    </style>
+  </head>
+  <body><main>
+    <h1>连接 Tesla 订单详情</h1>
+    <ol>
+      <li>在新窗口打开 Tesla 官方登录页面并完成登录。</li>
+      <li>最终会停在一个空白页面。复制地址栏中以 <code>https://auth.tesla.com/void/callback</code> 开头的完整地址。</li>
+      <li>回到本页，粘贴地址并提交。OrderPulse 不会接触你的 Tesla 密码或 MFA。</li>
+    </ol>
+    <p><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">打开 Tesla 登录</a></p>
+    <form method="post" action="/oauth/owner/complete">
+      <label for="callbackUrl">Tesla 最终回调地址</label>
+      <input id="callbackUrl" name="callbackUrl" type="url" required autocomplete="off" placeholder="https://auth.tesla.com/void/callback?code=...">
+      <button type="submit">保存 Owner 授权</button>
+    </form>
+  </main></body>
 </html>`;
 }
 
@@ -191,6 +232,7 @@ export function createApp({
   orderMonitor,
   mobileCredentials = new MobileCredentials(config.tokenEncryptionKey),
   notifications,
+  ownerService,
 }: AppDependencies): FastifyInstance {
   const app = Fastify({
     logger: false,
@@ -200,6 +242,13 @@ export function createApp({
   });
   const loginAttempts = new Map<string, LoginAttempt>();
   const pairingAttempts = new Map<string, LoginAttempt>();
+
+  app.addContentTypeParser(
+    "application/x-www-form-urlencoded",
+    { parseAs: "string" },
+    async (_request: FastifyRequest, body: string) =>
+      Object.fromEntries(new URLSearchParams(body)),
+  );
 
   app.addHook("onSend", async (request, reply, payload) => {
     reply.header("X-Content-Type-Options", "nosniff");
@@ -215,7 +264,7 @@ export function createApp({
     if (reply.getHeader("content-type")?.toString().startsWith("text/html")) {
       reply.header(
         "Content-Security-Policy",
-        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       );
     }
     return payload;
@@ -313,6 +362,37 @@ export function createApp({
     );
   });
 
+  app.get("/oauth/owner/start", { preHandler: requireAdmin }, async (_request, reply) => {
+    if (!ownerService) return reply.code(503).send({ error: "owner_api_unavailable" });
+    const authorizationUrl = ownerService.beginAuthorization();
+    return reply
+      .type("text/html; charset=utf-8")
+      .send(ownerAuthorizationPage(authorizationUrl));
+  });
+
+  app.post("/oauth/owner/complete", { preHandler: requireAdmin }, async (request, reply) => {
+    if (!ownerService) return reply.code(503).send({ error: "owner_api_unavailable" });
+    const parsed = ownerCallbackSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .type("text/html; charset=utf-8")
+        .send(htmlPage("Owner 授权失败", "请粘贴 Tesla 空白页地址栏中的完整回调地址。"));
+    }
+    try {
+      await ownerService.completeAuthorization(parsed.data.callbackUrl);
+      return reply
+        .type("text/html; charset=utf-8")
+        .send(htmlPage("订单详情已连接", "Owner token 已加密保存在 NAS。现在可以执行一次手动轮询建立详情基线。"));
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Owner authorization failed";
+      return reply
+        .code(400)
+        .type("text/html; charset=utf-8")
+        .send(htmlPage("Owner 授权失败", message));
+    }
+  });
+
   app.get<{ Querystring: CallbackQuery }>("/oauth/tesla/callback", async (request, reply) => {
     const { code, state, error, error_description: errorDescription } = request.query;
     if (!state) {
@@ -376,8 +456,16 @@ export function createApp({
     if (tokens && storedScopes.length === 0 && scopes.length > 0) {
       database.updateScopes(scopes.join(" "));
     }
+    const ownerTokens = database.loadOwnerTokens();
     return {
       authorized: tokens !== null,
+      ownerAuthorized: ownerTokens !== null,
+      ...(ownerTokens
+        ? {
+            ownerExpiresAt: new Date(ownerTokens.accessExpiresAt).toISOString(),
+            ownerUpdatedAt: new Date(ownerTokens.updatedAt).toISOString(),
+          }
+        : {}),
       ...(tokens
         ? {
             expiresAt: new Date(tokens.accessExpiresAt).toISOString(),
@@ -508,6 +596,7 @@ export function createApp({
     return {
       serverTime: new Date().toISOString(),
       apnsEnabled: notifications?.enabled ?? false,
+      ownerAuthorized: ownerService?.authorized ?? false,
       orders: database.listOrderSnapshots().map(serializeSnapshot),
       events: database.listOrderEvents(50).map(serializeEvent),
       polling: {
@@ -575,21 +664,10 @@ export function createApp({
 
   app.get("/api/order-details/schema", { preHandler: requireAdmin }, async (_request, reply) => {
     try {
-      const orders = await tokenService.getOrders();
-      const order = orders.find(
-        (candidate) =>
-          typeof candidate.referenceNumber === "string" && candidate.referenceNumber.length > 0,
-      );
-      if (!order?.referenceNumber) {
-        return reply.code(409).send({
-          error: "no_active_order",
-          message: "Tesla did not return an active order with a reference number",
-        });
+      if (!ownerService?.authorized) {
+        return reply.code(409).send({ error: "owner_not_authorized" });
       }
-      const details = await tokenService.getOrderDetails(
-        order.referenceNumber,
-        order.countryCode,
-      );
+      const details = await ownerService.getFirstOrderDetails();
       return {
         source: "undocumented_tesla_delivery_api",
         warning: "This endpoint is not part of the supported Tesla Fleet API",
@@ -611,6 +689,11 @@ export function createApp({
 
   app.delete("/api/authorization", { preHandler: requireAdmin }, async (_request, reply) => {
     database.deleteTeslaTokens();
+    return reply.code(204).send();
+  });
+
+  app.delete("/api/owner-authorization", { preHandler: requireAdmin }, async (_request, reply) => {
+    ownerService?.revoke();
     return reply.code(204).send();
   });
 

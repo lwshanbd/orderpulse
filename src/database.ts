@@ -16,7 +16,13 @@ import type {
   MobileDevice,
   NotificationJob,
 } from "./mobile-types.js";
-import type { OAuthTransaction, StoredTeslaTokens, TeslaTokenResponse } from "./types.js";
+import type {
+  OAuthTransaction,
+  OrderDeliveryDetails,
+  StoredOwnerTokens,
+  StoredTeslaTokens,
+  TeslaTokenResponse,
+} from "./types.js";
 import { SecretBox } from "./crypto.js";
 
 interface OAuthRow {
@@ -36,6 +42,15 @@ interface TokenRow {
   updated_at: number;
 }
 
+interface OwnerTokenRow {
+  access_ciphertext: string;
+  refresh_ciphertext: string;
+  token_type: string;
+  access_expires_at: number;
+  scopes: string;
+  updated_at: number;
+}
+
 interface SnapshotRow {
   order_key: string;
   reference_suffix: string | null;
@@ -43,6 +58,7 @@ interface SnapshotRow {
   order_substatus: string | null;
   model_code: string | null;
   market_options_json: string;
+  delivery_details_json: string | null;
   first_seen_at: number;
   last_seen_at: number;
   last_changed_at: number;
@@ -113,6 +129,29 @@ function maskedReference(referenceSuffix: string | null): string | null {
   return referenceSuffix ? `••••${referenceSuffix}` : null;
 }
 
+function parseDeliveryDetails(value: string | null): OrderDeliveryDetails | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === "object" && parsed !== null
+      ? parsed as OrderDeliveryDetails
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function deliverySummary(value: string | null): string | null {
+  const delivery = parseDeliveryDetails(value);
+  if (!delivery) return null;
+  if (delivery.appointment) return `Delivery appointment: ${delivery.appointment}`;
+  if (delivery.deliveryWindow) return `Delivery window: ${delivery.deliveryWindow}`;
+  if (delivery.etaToDeliveryCenter) return `ETA to delivery center: ${delivery.etaToDeliveryCenter}`;
+  if (delivery.vinAssigned) return "VIN assigned";
+  if (delivery.pendingTaskCount > 0) return `${delivery.pendingTaskCount} app tasks pending`;
+  return "Delivery details updated";
+}
+
 function snapshotFromRow(row: SnapshotRow): OrderSnapshot {
   return {
     orderId: row.order_key,
@@ -121,6 +160,7 @@ function snapshotFromRow(row: SnapshotRow): OrderSnapshot {
     orderSubstatus: row.order_substatus,
     modelCode: row.model_code,
     marketOptions: parseMarketOptions(row.market_options_json),
+    delivery: parseDeliveryDetails(row.delivery_details_json),
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at,
     lastChangedAt: row.last_changed_at,
@@ -211,6 +251,16 @@ export class OrderPulseDatabase {
         updated_at INTEGER NOT NULL
       ) STRICT;
 
+      CREATE TABLE IF NOT EXISTS owner_tokens (
+        singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+        access_ciphertext TEXT NOT NULL,
+        refresh_ciphertext TEXT NOT NULL,
+        token_type TEXT NOT NULL,
+        access_expires_at INTEGER NOT NULL,
+        scopes TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+
       CREATE TABLE IF NOT EXISTS order_snapshots (
         order_key TEXT PRIMARY KEY,
         reference_suffix TEXT,
@@ -218,6 +268,7 @@ export class OrderPulseDatabase {
         order_substatus TEXT,
         model_code TEXT,
         market_options_json TEXT NOT NULL,
+        delivery_details_json TEXT,
         first_seen_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL,
         last_changed_at INTEGER NOT NULL,
@@ -296,6 +347,15 @@ export class OrderPulseDatabase {
       CREATE INDEX IF NOT EXISTS notification_deliveries_retry_idx
         ON notification_deliveries(status, next_attempt_at);
     `);
+
+    const snapshotColumns = this.#database
+      .prepare("PRAGMA table_info(order_snapshots)")
+      .all() as Array<{ name: string }>;
+    if (!snapshotColumns.some((column) => column.name === "delivery_details_json")) {
+      this.#database.exec(
+        "ALTER TABLE order_snapshots ADD COLUMN delivery_details_json TEXT",
+      );
+    }
   }
 
   createOAuthTransaction(transaction: OAuthTransaction): void {
@@ -433,6 +493,67 @@ export class OrderPulseDatabase {
     this.#database.prepare("DELETE FROM tesla_tokens WHERE singleton_id = 1").run();
   }
 
+  saveOwnerTokens(input: {
+    tokens: TeslaTokenResponse;
+    previousRefreshToken?: string;
+  }): void {
+    const refreshToken = input.tokens.refresh_token ?? input.previousRefreshToken;
+    if (!refreshToken) throw new Error("Tesla Owner did not return a refresh token");
+    const now = Date.now();
+    this.#database
+      .prepare(
+        `INSERT INTO owner_tokens (
+          singleton_id, access_ciphertext, refresh_ciphertext, token_type,
+          access_expires_at, scopes, updated_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(singleton_id) DO UPDATE SET
+          access_ciphertext = excluded.access_ciphertext,
+          refresh_ciphertext = excluded.refresh_ciphertext,
+          token_type = excluded.token_type,
+          access_expires_at = excluded.access_expires_at,
+          scopes = excluded.scopes,
+          updated_at = excluded.updated_at`,
+      )
+      .run(
+        this.#secrets.encrypt(input.tokens.access_token),
+        this.#secrets.encrypt(refreshToken),
+        input.tokens.token_type,
+        now + input.tokens.expires_in * 1_000,
+        input.tokens.scope ?? "openid email offline_access",
+        now,
+      );
+  }
+
+  loadOwnerTokens(): StoredOwnerTokens | null {
+    const row = this.#database
+      .prepare(
+        `SELECT access_ciphertext, refresh_ciphertext, token_type,
+                access_expires_at, scopes, updated_at
+         FROM owner_tokens WHERE singleton_id = 1`,
+      )
+      .get() as unknown as OwnerTokenRow | undefined;
+    if (!row) return null;
+    return {
+      accessToken: this.#secrets.decrypt(row.access_ciphertext),
+      refreshToken: this.#secrets.decrypt(row.refresh_ciphertext),
+      tokenType: row.token_type,
+      accessExpiresAt: row.access_expires_at,
+      scopes: row.scopes,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  hasOwnerTokens(): boolean {
+    const row = this.#database
+      .prepare("SELECT 1 AS present FROM owner_tokens WHERE singleton_id = 1")
+      .get() as { present: number } | undefined;
+    return row?.present === 1;
+  }
+
+  deleteOwnerTokens(): void {
+    this.#database.prepare("DELETE FROM owner_tokens WHERE singleton_id = 1").run();
+  }
+
   reconcileOrders(
     orders: TrackedOrder[],
     missingThreshold: number,
@@ -452,21 +573,22 @@ export class OrderPulseDatabase {
     try {
       const selectSnapshot = this.#database.prepare(
         `SELECT order_key, reference_suffix, order_status, order_substatus,
-                model_code, market_options_json, first_seen_at, last_seen_at,
+                model_code, market_options_json, delivery_details_json,
+                first_seen_at, last_seen_at,
                 last_changed_at, missing_count, inactive_at
          FROM order_snapshots WHERE order_key = ?`,
       );
       const insertSnapshot = this.#database.prepare(
         `INSERT INTO order_snapshots (
           order_key, reference_suffix, order_status, order_substatus, model_code,
-          market_options_json, first_seen_at, last_seen_at, last_changed_at,
+          market_options_json, delivery_details_json, first_seen_at, last_seen_at, last_changed_at,
           missing_count, inactive_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
       );
       const updateSeenSnapshot = this.#database.prepare(
         `UPDATE order_snapshots SET
           reference_suffix = ?, order_status = ?, order_substatus = ?, model_code = ?,
-          market_options_json = ?, last_seen_at = ?, last_changed_at = ?,
+          market_options_json = ?, delivery_details_json = ?, last_seen_at = ?, last_changed_at = ?,
           missing_count = 0, inactive_at = NULL
          WHERE order_key = ?`,
       );
@@ -503,6 +625,8 @@ export class OrderPulseDatabase {
       for (const order of uniqueOrders.values()) {
         const existing = selectSnapshot.get(order.orderKey) as unknown as SnapshotRow | undefined;
         const marketOptionsJson = JSON.stringify(order.marketOptions);
+        const suppliedDeliveryDetailsJson =
+          order.delivery === null ? null : JSON.stringify(order.delivery);
         if (!existing) {
           insertSnapshot.run(
             order.orderKey,
@@ -511,6 +635,7 @@ export class OrderPulseDatabase {
             order.orderSubstatus,
             order.modelCode,
             marketOptionsJson,
+            suppliedDeliveryDetailsJson,
             now,
             now,
             now,
@@ -528,14 +653,24 @@ export class OrderPulseDatabase {
           continue;
         }
 
+        // A Fleet API fallback has no delivery payload. Preserve the last Owner
+        // snapshot instead of treating that absence as a real Tesla change.
+        const deliveryDetailsJson =
+          suppliedDeliveryDetailsJson ?? existing.delivery_details_json;
+
         const statusChanged =
           existing.order_status !== order.orderStatus ||
           existing.order_substatus !== order.orderSubstatus;
         const configurationChanged =
           existing.model_code !== order.modelCode ||
           existing.market_options_json !== marketOptionsJson;
+        const deliveryInitialized =
+          existing.delivery_details_json === null && deliveryDetailsJson !== null;
+        const deliveryChanged =
+          existing.delivery_details_json !== deliveryDetailsJson && !deliveryInitialized;
         const reappeared = existing.inactive_at !== null;
-        const materiallyChanged = statusChanged || configurationChanged || reappeared;
+        const materiallyChanged =
+          statusChanged || configurationChanged || deliveryChanged || reappeared;
 
         if (reappeared) {
           addEvent({
@@ -557,6 +692,16 @@ export class OrderPulseDatabase {
             currentSubstatus: order.orderSubstatus,
             notificationEligible: true,
           });
+        } else if (deliveryChanged) {
+          addEvent({
+            orderKey: order.orderKey,
+            type: "configuration_changed",
+            previousStatus: existing.order_status,
+            previousSubstatus: deliverySummary(existing.delivery_details_json),
+            currentStatus: order.orderStatus,
+            currentSubstatus: deliverySummary(deliveryDetailsJson),
+            notificationEligible: true,
+          });
         } else if (configurationChanged) {
           addEvent({
             orderKey: order.orderKey,
@@ -575,6 +720,7 @@ export class OrderPulseDatabase {
           order.orderSubstatus,
           order.modelCode,
           marketOptionsJson,
+          deliveryDetailsJson,
           now,
           materiallyChanged ? now : existing.last_changed_at,
           order.orderKey,
@@ -584,7 +730,8 @@ export class OrderPulseDatabase {
       const activeRows = this.#database
         .prepare(
           `SELECT order_key, reference_suffix, order_status, order_substatus,
-                  model_code, market_options_json, first_seen_at, last_seen_at,
+                  model_code, market_options_json, delivery_details_json,
+                  first_seen_at, last_seen_at,
                   last_changed_at, missing_count, inactive_at
            FROM order_snapshots WHERE inactive_at IS NULL`,
         )
@@ -635,7 +782,8 @@ export class OrderPulseDatabase {
     const rows = this.#database
       .prepare(
         `SELECT order_key, reference_suffix, order_status, order_substatus,
-                model_code, market_options_json, first_seen_at, last_seen_at,
+                model_code, market_options_json, delivery_details_json,
+                first_seen_at, last_seen_at,
                 last_changed_at, missing_count, inactive_at
          FROM order_snapshots
          ORDER BY inactive_at IS NOT NULL, last_changed_at DESC`,

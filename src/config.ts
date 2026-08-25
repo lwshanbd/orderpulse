@@ -27,6 +27,7 @@ export interface ServiceConfig {
   teslaScopes: string[];
   teslaPublicKeyFile: string;
   oauthTransactionTtlSeconds: number;
+  ownerAuthorizationTtlSeconds: number;
   requestTimeoutMs: number;
   requireIdToken: boolean;
   orderPollingEnabled: boolean;
@@ -137,6 +138,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
   if (mobilePairingTtlSeconds > 3_600) {
     throw new Error("MOBILE_PAIRING_TTL_SECONDS must not exceed 3600");
   }
+  const ownerAuthorizationTtlSeconds = parsePositiveInteger(
+    env.OWNER_AUTHORIZATION_TTL_SECONDS,
+    3_600,
+    "OWNER_AUTHORIZATION_TTL_SECONDS",
+  );
+  if (ownerAuthorizationTtlSeconds > 3_600) {
+    throw new Error("OWNER_AUTHORIZATION_TTL_SECONDS must not exceed 3600");
+  }
 
   const apnsEnabled = parseBoolean(env.APNS_ENABLED, false);
   const apnsEnvironment = z
@@ -238,6 +247,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
       600,
       "OAUTH_TRANSACTION_TTL_SECONDS",
     ),
+    ownerAuthorizationTtlSeconds,
     requestTimeoutMs: parsePositiveInteger(env.REQUEST_TIMEOUT_MS, 10_000, "REQUEST_TIMEOUT_MS"),
     requireIdToken: parseBoolean(env.TESLA_REQUIRE_ID_TOKEN, true),
     orderPollingEnabled,

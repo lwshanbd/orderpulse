@@ -149,6 +149,7 @@ extension BootstrapResponse {
     static let demo = BootstrapResponse(
         serverTime: "2026-08-25T20:45:00.000Z",
         apnsEnabled: true,
+        ownerAuthorized: true,
         orders: [
             OrderSnapshot(
                 orderId: "demo",
@@ -157,6 +158,30 @@ extension BootstrapResponse {
                 orderSubstatus: "AWAITING_VIN",
                 modelCode: "MY",
                 marketOptions: ["Pearl White", "19-inch Wheels"],
+                delivery: DeliveryDetails(
+                    vin: nil,
+                    vinAssigned: false,
+                    deliveryWindow: "September 13 – September 30",
+                    appointment: nil,
+                    etaToDeliveryCenter: nil,
+                    vehicleLocation: nil,
+                    deliveryMethod: "PICKUP_SERVICE_CENTER",
+                    deliveryCenter: "Smithtown",
+                    odometer: nil,
+                    odometerUnit: nil,
+                    reservationDate: "2026-08-24T14:00:00.000Z",
+                    orderBookedDate: "2026-08-24T14:00:00.000Z",
+                    licensePlate: nil,
+                    financingComplete: true,
+                    deliveryAgentAssigned: true,
+                    pendingTaskCount: 1,
+                    totalTaskCount: 3,
+                    tasks: [
+                        OrderTaskSummary(id: "registration", title: "Registration", complete: true, enabled: true, required: true, order: 1),
+                        OrderTaskSummary(id: "finance", title: "Financing", complete: true, enabled: true, required: true, order: 2),
+                        OrderTaskSummary(id: "insurance", title: "Insurance", complete: false, enabled: true, required: true, order: 3),
+                    ]
+                ),
                 firstSeenAt: "2026-08-24T14:00:00.000Z",
                 lastSeenAt: "2026-08-25T20:30:00.000Z",
                 lastChangedAt: "2026-08-25T18:10:00.000Z",

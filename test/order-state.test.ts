@@ -88,3 +88,66 @@ test("orders without a stable Tesla identifier are rejected before reconciliatio
   assert.equal(first.orderKey, second.orderKey);
   assert.deepEqual(first.marketOptions, ["A", "B"]);
 });
+
+test("Owner delivery details establish a silent baseline and later changes notify", () => {
+  const directory = mkdtempSync(join(tmpdir(), "orderpulse-delivery-"));
+  const key = randomBytes(32);
+  const database = new OrderPulseDatabase(
+    join(directory, "orderpulse.sqlite"),
+    new SecretBox(key),
+  );
+  const identity = new OrderIdentity(key);
+  const baseOrder = {
+    referenceNumber: "RN123456789",
+    orderStatus: "BOOKED",
+    orderSubstatus: "AWAITING_VIN",
+    modelCode: "MY",
+  };
+  const fleetBaseline = identity.normalize(baseOrder);
+  assert.ok(fleetBaseline);
+  database.reconcileOrders([fleetBaseline], 3, 1_000);
+
+  const delivery = {
+    vin: null,
+    vinAssigned: false,
+    deliveryWindow: "September 13 - September 30",
+    appointment: null,
+    etaToDeliveryCenter: null,
+    vehicleLocation: null,
+    deliveryMethod: "PICKUP_SERVICE_CENTER",
+    deliveryCenter: "Smithtown",
+    odometer: null,
+    odometerUnit: null,
+    reservationDate: null,
+    orderBookedDate: null,
+    licensePlate: null,
+    financingComplete: true,
+    deliveryAgentAssigned: true,
+    pendingTaskCount: 1,
+    totalTaskCount: 2,
+    tasks: [],
+  };
+  const ownerBaseline = identity.normalize({ ...baseOrder, orderPulseDelivery: delivery });
+  assert.ok(ownerBaseline);
+  const enrichment = database.reconcileOrders([ownerBaseline], 3, 2_000);
+  assert.equal(enrichment.eventCount, 0);
+  assert.equal(database.listOrderSnapshots()[0]?.delivery?.deliveryCenter, "Smithtown");
+
+  const changed = identity.normalize({
+    ...baseOrder,
+    orderPulseDelivery: { ...delivery, deliveryWindow: "September 20 - September 25" },
+  });
+  assert.ok(changed);
+  const update = database.reconcileOrders([changed], 3, 3_000);
+  assert.equal(update.notificationEligibleCount, 1);
+  const event = database.listOrderEvents()[0];
+  assert.equal(event?.type, "configuration_changed");
+  assert.match(event?.currentSubstatus ?? "", /September 20/);
+
+  database.reconcileOrders([fleetBaseline], 3, 4_000);
+  assert.equal(
+    database.listOrderSnapshots()[0]?.delivery?.deliveryWindow,
+    "September 20 - September 25",
+  );
+  database.close();
+});

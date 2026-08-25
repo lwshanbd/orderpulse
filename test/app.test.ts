@@ -113,6 +113,7 @@ function testConfig(directory: string, publicKeyFile: string): ServiceConfig {
     teslaScopes: ["openid", "offline_access", "user_data", "vehicle_device_data"],
     teslaPublicKeyFile: publicKeyFile,
     oauthTransactionTtlSeconds: 600,
+    ownerAuthorizationTtlSeconds: 3_600,
     requestTimeoutMs: 1_000,
     requireIdToken: false,
     orderPollingEnabled: false,
@@ -261,9 +262,8 @@ test("service protects admin routes and completes a one-time OAuth callback", as
     url: "/api/order-details/schema",
     headers: { authorization },
   });
-  assert.equal(detailSchema.statusCode, 200);
-  assert.match(detailSchema.body, /tasks\.scheduling\.deliveryWindowDisplay/);
-  assert.doesNotMatch(detailSchema.body, /August 28|Private delivery appointment|RN123456789/);
+  assert.equal(detailSchema.statusCode, 409);
+  assert.equal(detailSchema.json().error, "owner_not_authorized");
 
   const pairingCodeResponse = await app.inject({
     method: "POST",
