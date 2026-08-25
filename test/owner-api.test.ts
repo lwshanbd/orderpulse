@@ -109,7 +109,7 @@ test("Owner PKCE authorization is one-time and enriches orders without exposing 
   assert.ok(gateway.state?.startsWith("owner_"));
   assert.ok(gateway.codeChallenge);
   await service.completeAuthorization(
-    `https://auth.tesla.com/void/callback?code=owner-code&state=${encodeURIComponent(gateway.state ?? "")}`,
+    `tesla://auth/callback?code=owner-code&state=${encodeURIComponent(gateway.state ?? "")}`,
   );
   assert.equal(ownerCodeChallenge(gateway.exchangedVerifier ?? ""), gateway.codeChallenge);
   assert.equal(service.authorized, true);
@@ -126,6 +126,12 @@ test("Owner PKCE authorization is one-time and enriches orders without exposing 
   await assert.rejects(
     () => service.completeAuthorization(
       `https://auth.tesla.com/void/callback?code=owner-code&state=${encodeURIComponent(gateway.state ?? "")}`,
+    ),
+    /not from Tesla/,
+  );
+  await assert.rejects(
+    () => service.completeAuthorization(
+      `tesla://auth/callback?code=owner-code&state=${encodeURIComponent(gateway.state ?? "")}`,
     ),
     /already used/,
   );
@@ -177,6 +183,11 @@ test("Owner client uses PKCE form exchange and fixed Tesla detail endpoint", asy
     });
   };
   const client = new OwnerTeslaClient(1_000, fakeFetch);
+  const authorizationUrl = client.buildAuthorizationUrl({
+    state: "state",
+    codeChallenge: "challenge",
+  });
+  assert.equal(authorizationUrl.searchParams.get("redirect_uri"), "tesla://auth/callback");
 
   await client.exchangeAuthorizationCode({ code: "one-time-code", codeVerifier: "verifier" });
   await client.getOrderDetails("access", "RN1234", "us");

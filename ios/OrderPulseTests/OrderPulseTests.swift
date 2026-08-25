@@ -37,4 +37,12 @@ final class OrderPulseTests: XCTestCase {
         XCTAssertFalse(response.apnsEnabled)
         XCTAssertEqual(response.ownerAuthorized, true)
     }
+
+    func testOwnerAuthorizationStartDecodesTeslaCallbackScheme() throws {
+        let data = Data(#"{"authorizationUrl":"https://auth.tesla.com/oauth2/v3/authorize?redirect_uri=tesla%3A%2F%2Fauth%2Fcallback"}"#.utf8)
+        let response = try JSONDecoder().decode(OwnerAuthorizationStartResponse.self, from: data)
+        let components = URLComponents(url: response.authorizationUrl, resolvingAgainstBaseURL: false)
+        let redirect = components?.queryItems?.first(where: { $0.name == "redirect_uri" })?.value
+        XCTAssertEqual(redirect, "tesla://auth/callback")
+    }
 }

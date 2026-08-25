@@ -11,8 +11,10 @@ import { SecretBox } from "../src/crypto.js";
 import { OrderPulseDatabase } from "../src/database.js";
 import { OrderIdentity } from "../src/order-identity.js";
 import { OrderMonitor } from "../src/order-monitor.js";
+import { OwnerTokenService } from "../src/owner-service.js";
 import { TeslaTokenService } from "../src/token-service.js";
 import type {
+  OwnerGateway,
   TeslaGateway,
   TeslaOrder,
   TeslaRegionResult,
@@ -91,6 +93,43 @@ class MockTesla implements TeslaGateway {
   }
 }
 
+class MockOwner implements OwnerGateway {
+  buildAuthorizationUrl(input: { state: string; codeChallenge: string }): URL {
+    const url = new URL("https://auth.tesla.com/oauth2/v3/authorize");
+    url.searchParams.set("state", input.state);
+    url.searchParams.set("code_challenge", input.codeChallenge);
+    url.searchParams.set("redirect_uri", "tesla://auth/callback");
+    return url;
+  }
+
+  async exchangeAuthorizationCode(input: {
+    code: string;
+    codeVerifier: string;
+  }): Promise<TeslaTokenResponse> {
+    assert.equal(input.code, "owner-code");
+    assert.ok(input.codeVerifier.length >= 43);
+    return {
+      access_token: "owner-access-token",
+      refresh_token: "owner-refresh-token",
+      token_type: "Bearer",
+      expires_in: 3_600,
+      scope: "openid email offline_access",
+    };
+  }
+
+  async refresh(): Promise<TeslaTokenResponse> {
+    throw new Error("refresh should not run in this test");
+  }
+
+  async getOrders(): Promise<TeslaOrder[]> {
+    return [];
+  }
+
+  async getOrderDetails(): Promise<unknown> {
+    return { tasks: {} };
+  }
+}
+
 function testConfig(directory: string, publicKeyFile: string): ServiceConfig {
   return {
     nodeEnv: "test",
@@ -138,6 +177,11 @@ test("service protects admin routes and completes a one-time OAuth callback", as
   const database = new OrderPulseDatabase(config.databasePath, new SecretBox(config.tokenEncryptionKey));
   const tesla = new MockTesla();
   const tokenService = new TeslaTokenService(database, tesla);
+  const ownerService = new OwnerTokenService(
+    database,
+    new MockOwner(),
+    config.ownerAuthorizationTtlSeconds,
+  );
   const orderMonitor = new OrderMonitor({
     database,
     tokenService,
@@ -147,7 +191,14 @@ test("service protects admin routes and completes a one-time OAuth callback", as
     jitterSeconds: config.orderPollingJitterSeconds,
     missingThreshold: config.orderMissingThreshold,
   });
-  const app = createApp({ config, database, tesla, tokenService, orderMonitor });
+  const app = createApp({
+    config,
+    database,
+    tesla,
+    tokenService,
+    orderMonitor,
+    ownerService,
+  });
   const authorization = `Basic ${Buffer.from("orderpulse:a-long-test-password").toString("base64")}`;
 
   const health = await app.inject({ method: "GET", url: "/healthz" });
@@ -300,6 +351,42 @@ test("service protects admin routes and completes a one-time OAuth callback", as
   assert.equal(bootstrap.statusCode, 200);
   assert.match(bootstrap.body, /AWAITING_VIN/);
   assert.doesNotMatch(bootstrap.body, /RN123456789|5YJ12345678901234|123 Private Road/);
+
+  const ownerStart = await app.inject({
+    method: "POST",
+    url: "/api/mobile/owner-authorization/start",
+    headers: { authorization: mobileAuthorization },
+  });
+  assert.equal(ownerStart.statusCode, 200);
+  const ownerAuthorizationUrl = new URL(ownerStart.json().authorizationUrl as string);
+  assert.equal(ownerAuthorizationUrl.searchParams.get("redirect_uri"), "tesla://auth/callback");
+  const ownerState = ownerAuthorizationUrl.searchParams.get("state");
+  assert.ok(ownerState);
+
+  const ownerComplete = await app.inject({
+    method: "POST",
+    url: "/api/mobile/owner-authorization/complete",
+    headers: { authorization: mobileAuthorization },
+    payload: {
+      callbackUrl: `tesla://auth/callback?code=owner-code&state=${encodeURIComponent(ownerState)}`,
+    },
+  });
+  assert.equal(ownerComplete.statusCode, 204);
+  assert.equal(database.hasOwnerTokens(), true);
+
+  const ownerBootstrap = await app.inject({
+    method: "GET",
+    url: "/api/mobile/bootstrap",
+    headers: { authorization: mobileAuthorization },
+  });
+  assert.equal(ownerBootstrap.json().ownerAuthorized, true);
+
+  const duplicateOwnerStart = await app.inject({
+    method: "POST",
+    url: "/api/mobile/owner-authorization/start",
+    headers: { authorization: mobileAuthorization },
+  });
+  assert.equal(duplicateOwnerStart.statusCode, 409);
 
   const pushToken = "ab".repeat(32);
   const registeredPush = await app.inject({

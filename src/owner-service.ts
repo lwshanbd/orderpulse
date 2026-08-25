@@ -4,8 +4,9 @@ import { extractOrderDeliveryDetails, ownerCodeChallenge } from "./owner-api.js"
 import { TeslaRequestError } from "./tesla.js";
 import type { OwnerGateway, TeslaOrder } from "./types.js";
 
-const OWNER_CALLBACK_ORIGIN = "https://auth.tesla.com";
-const OWNER_CALLBACK_PATH = "/void/callback";
+const OWNER_CALLBACK_PROTOCOL = "tesla:";
+const OWNER_CALLBACK_HOST = "auth";
+const OWNER_CALLBACK_PATH = "/callback";
 
 export class OwnerTokenService {
   readonly #database: OrderPulseDatabase;
@@ -48,7 +49,14 @@ export class OwnerTokenService {
     } catch {
       throw new Error("Owner callback URL is invalid");
     }
-    if (callback.origin !== OWNER_CALLBACK_ORIGIN || callback.pathname !== OWNER_CALLBACK_PATH) {
+    if (
+      callback.protocol !== OWNER_CALLBACK_PROTOCOL ||
+      callback.hostname !== OWNER_CALLBACK_HOST ||
+      callback.pathname !== OWNER_CALLBACK_PATH ||
+      callback.username !== "" ||
+      callback.password !== "" ||
+      callback.port !== ""
+    ) {
       throw new Error("Owner callback URL is not from Tesla");
     }
     const state = callback.searchParams.get("state");

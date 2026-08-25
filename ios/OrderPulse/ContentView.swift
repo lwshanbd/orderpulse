@@ -387,7 +387,20 @@ private struct SettingsView: View {
             Form {
                 Section("后台") {
                     LabeledContent("地址", value: "orderpulse.baodishan.com")
-                    LabeledContent("交付详情", value: model.bootstrap?.ownerAuthorized == true ? "已连接" : "尚未连接")
+                    if model.bootstrap?.ownerAuthorized == true {
+                        LabeledContent("交付详情", value: "已连接")
+                    } else {
+                        Button {
+                            Task { await model.connectOwnerAuthorization() }
+                        } label: {
+                            HStack {
+                                Label("连接 Tesla 订单详情", systemImage: "person.badge.key.fill")
+                                Spacer()
+                                if model.isConnectingOwner { ProgressView() }
+                            }
+                        }
+                        .disabled(model.isConnectingOwner)
+                    }
                     LabeledContent("通知", value: model.notificationStatus)
                     Button("重新申请通知权限") { Task { await model.enableNotifications() } }
                 }

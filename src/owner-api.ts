@@ -11,7 +11,7 @@ import type {
 import { TeslaRequestError } from "./tesla.js";
 
 const OWNER_CLIENT_ID = "ownerapi";
-const OWNER_REDIRECT_URI = "https://auth.tesla.com/void/callback";
+const OWNER_REDIRECT_URI = "tesla://auth/callback";
 const OWNER_AUTHORIZATION_URL = "https://auth.tesla.com/oauth2/v3/authorize";
 const OWNER_TOKEN_URL = "https://auth.tesla.com/oauth2/v3/token";
 const OWNER_ORDERS_URL = "https://owner-api.teslamotors.com/api/1/users/orders";
@@ -346,7 +346,7 @@ export class OwnerTeslaClient implements OwnerGateway {
     },
   ): Promise<OwnerHttpResponse> {
     const requestHeaders: Record<string, string> = {
-      "user-agent": "OrderPulse/0.4",
+      "user-agent": "OrderPulse/0.4.1",
       "x-tesla-user-agent": "TeslaApp/4.10.0",
       ...input.headers,
     };

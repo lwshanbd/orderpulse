@@ -1,3 +1,4 @@
+import AuthenticationServices
 import Combine
 import Foundation
 import UIKit
@@ -10,10 +11,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
     @Published private(set) var notificationStatus = "尚未启用"
+    @Published private(set) var isConnectingOwner = false
 
     private let api = APIClient()
     private var accessToken: String?
     private var observers: [NSObjectProtocol] = []
+    private var ownerAuthenticationSession: ASWebAuthenticationSession?
+    private let ownerAuthenticationContext = OwnerAuthenticationContext()
 
     init() {
         accessToken = KeychainStore.loadAccessToken()
@@ -88,6 +92,34 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func connectOwnerAuthorization() async {
+        guard let accessToken, !isConnectingOwner else { return }
+        isConnectingOwner = true
+        errorMessage = nil
+        do {
+            let response = try await api.beginOwnerAuthorization(accessToken: accessToken)
+            let session = ASWebAuthenticationSession(
+                url: response.authorizationUrl,
+                callbackURLScheme: "tesla"
+            ) { [weak self] callbackURL, error in
+                Task { @MainActor [weak self] in
+                    await self?.finishOwnerAuthorization(callbackURL: callbackURL, error: error)
+                }
+            }
+            session.presentationContextProvider = ownerAuthenticationContext
+            session.prefersEphemeralWebBrowserSession = false
+            ownerAuthenticationSession = session
+            if !session.start() {
+                ownerAuthenticationSession = nil
+                isConnectingOwner = false
+                errorMessage = "无法打开 Tesla 登录页面。"
+            }
+        } catch {
+            isConnectingOwner = false
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func unpair() async {
         if let accessToken {
             try? await api.revokeDevice(accessToken: accessToken)
@@ -96,11 +128,36 @@ final class AppModel: ObservableObject {
     }
 
     private func clearLocalPairing() {
+        ownerAuthenticationSession?.cancel()
+        ownerAuthenticationSession = nil
+        isConnectingOwner = false
         KeychainStore.deleteAccessToken()
         accessToken = nil
         bootstrap = nil
         isPaired = false
         notificationStatus = "尚未启用"
+    }
+
+    private func finishOwnerAuthorization(callbackURL: URL?, error: Error?) async {
+        ownerAuthenticationSession = nil
+        defer { isConnectingOwner = false }
+        if let authenticationError = error as? ASWebAuthenticationSessionError,
+           authenticationError.code == .canceledLogin {
+            return
+        }
+        guard let accessToken, let callbackURL else {
+            errorMessage = error?.localizedDescription ?? "Tesla 登录没有返回授权结果。"
+            return
+        }
+        do {
+            try await api.completeOwnerAuthorization(
+                callbackURL: callbackURL,
+                accessToken: accessToken
+            )
+            bootstrap = try await api.bootstrap(accessToken: accessToken)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func observeRemoteNotificationRegistration() {
@@ -141,6 +198,16 @@ final class AppModel: ObservableObject {
         } catch {
             notificationStatus = "设备 token 上传失败"
         }
+    }
+}
+
+@MainActor
+private final class OwnerAuthenticationContext: NSObject, ASWebAuthenticationPresentationContextProviding {
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow) ?? UIWindow()
     }
 }
 

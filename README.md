@@ -26,6 +26,8 @@
 - `POST /api/devices/:id/test-notification`：管理员向一台已注册设备发送 APNs 测试提醒。
 - `POST /api/mobile/pair`：iOS App 用一次性配对码换取独立设备凭证。
 - `GET /api/mobile/bootstrap`：iOS App 读取快照、事件和轮询状态，不调用 Tesla。
+- `POST /api/mobile/owner-authorization/start`：已配对 iPhone 开始个人 Tesla PKCE 登录。
+- `POST /api/mobile/owner-authorization/complete`：iPhone 安全登录窗口把 `tesla://` 回调交给 NAS 换取加密 token。
 - `PUT /api/mobile/device-token`：已配对设备上传最新 APNs token。
 - `DELETE /api/mobile/device`：iOS App 撤销自己的设备凭证。
 
@@ -214,7 +216,7 @@ Fleet 授权可以读取基础订单状态，但预计交付窗口等信息位�
 
 `https://orderpulse.baodishan.com/oauth/owner/start`
 
-输入管理员 Basic Auth 后，按页面说明在 Tesla 官方页面登录。Tesla 最后会停在空白页；把地址栏中以 `https://auth.tesla.com/void/callback` 开头的完整地址复制回 OrderPulse 页面提交。这个流程可在一小时内完成；NAS 只接收一次性授权码，不会看到 Tesla 密码或 MFA。
+输入管理员 Basic Auth 后，按页面说明在 Tesla 官方页面登录。最终浏览器可能提示无法打开链接；把以 `tesla://auth/callback` 开头的完整回调地址复制回 OrderPulse 页面提交。这个流程可在一小时内完成；NAS 只接收一次性授权码，不会看到 Tesla 密码或 MFA。新版 iOS App 也可以在设置中直接完成这个流程，无需手工复制。
 
 成功后检查 `/api/status` 的 `ownerAuthorized` 为 `true`，然后手动执行一次 `/api/polling/run`。第一次只建立交付详情基线，不推送；此后交付窗口、预约、VIN 分配、地点、顾问和 Tesla App 任务状态发生变化才提醒。iOS App 会直接显示这些字段。
 

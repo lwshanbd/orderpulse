@@ -5,6 +5,10 @@ struct PairResponse: Decodable {
     let accessToken: String
 }
 
+struct OwnerAuthorizationStartResponse: Decodable {
+    let authorizationUrl: URL
+}
+
 struct BootstrapResponse: Decodable {
     let serverTime: String
     let apnsEnabled: Bool

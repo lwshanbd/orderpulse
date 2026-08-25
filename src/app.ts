@@ -115,13 +115,13 @@ function ownerAuthorizationPage(authorizationUrl: URL): string {
     <h1>连接 Tesla 订单详情</h1>
     <ol>
       <li>在新窗口打开 Tesla 官方登录页面并完成登录。</li>
-      <li>最终会停在一个空白页面。复制地址栏中以 <code>https://auth.tesla.com/void/callback</code> 开头的完整地址。</li>
+      <li>最终浏览器可能提示无法打开链接。复制以 <code>tesla://auth/callback</code> 开头的完整回调地址；这是 Tesla 当前为 ownerapi 注册的地址。</li>
       <li>回到本页，粘贴地址并提交。OrderPulse 不会接触你的 Tesla 密码或 MFA。</li>
     </ol>
     <p><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">打开 Tesla 登录</a></p>
     <form method="post" action="/oauth/owner/complete">
       <label for="callbackUrl">Tesla 最终回调地址</label>
-      <input id="callbackUrl" name="callbackUrl" type="url" required autocomplete="off" placeholder="https://auth.tesla.com/void/callback?code=...">
+      <input id="callbackUrl" name="callbackUrl" type="url" required autocomplete="off" placeholder="tesla://auth/callback?code=...">
       <button type="submit">保存 Owner 授权</button>
     </form>
   </main></body>
@@ -607,6 +607,34 @@ export function createApp({
       },
     };
   });
+
+  app.post(
+    "/api/mobile/owner-authorization/start",
+    { preHandler: requireMobile },
+    async (_request, reply) => {
+      if (!ownerService) return reply.code(503).send({ error: "owner_api_unavailable" });
+      if (ownerService.authorized) {
+        return reply.code(409).send({ error: "owner_already_authorized" });
+      }
+      return { authorizationUrl: ownerService.beginAuthorization().toString() };
+    },
+  );
+
+  app.post(
+    "/api/mobile/owner-authorization/complete",
+    { preHandler: requireMobile },
+    async (request, reply) => {
+      if (!ownerService) return reply.code(503).send({ error: "owner_api_unavailable" });
+      const parsed = ownerCallbackSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: "invalid_request" });
+      try {
+        await ownerService.completeAuthorization(parsed.data.callbackUrl);
+        return reply.code(204).send();
+      } catch {
+        return reply.code(400).send({ error: "owner_authorization_failed" });
+      }
+    },
+  );
 
   app.put("/api/mobile/device-token", { preHandler: requireMobile }, async (request, reply) => {
     const parsed = pushTokenSchema.safeParse(request.body);

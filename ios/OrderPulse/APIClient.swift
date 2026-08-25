@@ -36,6 +36,25 @@ struct APIClient {
         )
     }
 
+    func beginOwnerAuthorization(accessToken: String) async throws -> OwnerAuthorizationStartResponse {
+        try await request(
+            path: "/api/mobile/owner-authorization/start",
+            method: "POST",
+            body: Optional<[String: String]>.none,
+            accessToken: accessToken,
+            response: OwnerAuthorizationStartResponse.self
+        )
+    }
+
+    func completeOwnerAuthorization(callbackURL: URL, accessToken: String) async throws {
+        try await requestWithoutResponse(
+            path: "/api/mobile/owner-authorization/complete",
+            method: "POST",
+            body: ["callbackUrl": callbackURL.absoluteString],
+            accessToken: accessToken
+        )
+    }
+
     func registerPushToken(_ token: String, environment: String, accessToken: String) async throws {
         try await requestWithoutResponse(
             path: "/api/mobile/device-token",
@@ -132,6 +151,8 @@ enum APIError: LocalizedError {
             if status == 401 { return "设备配对已失效，请重新配对。" }
             if code == "invalid_or_expired_pairing_code" { return "配对码错误或已经过期。" }
             if code == "too_many_pairing_attempts" { return "尝试次数过多，请稍后再试。" }
+            if code == "owner_already_authorized" { return "Tesla 订单详情已经连接。" }
+            if code == "owner_authorization_failed" { return "Tesla 登录回调无效或已经过期，请重新开始。" }
             return message ?? "后台请求失败（\(status)）。"
         }
     }
