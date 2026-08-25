@@ -35,7 +35,7 @@ test("database stores OAuth nonces and Tesla tokens as ciphertext", () => {
       refresh_token: "plain-refresh-token",
       token_type: "Bearer",
       expires_in: 3_600,
-      scope: "openid offline_access user_data",
+      scope: "openid offline_access user_data vehicle_device_data",
     },
     fleetBaseUrl: "https://fleet-api.prd.na.vn.cloud.tesla.com",
     subject: "subject",

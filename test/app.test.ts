@@ -18,6 +18,9 @@ import type {
 } from "../src/types.js";
 
 const FLEET_BASE_URL = "https://fleet-api.prd.na.vn.cloud.tesla.com";
+const TEST_ACCESS_TOKEN = `${Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url")}.${Buffer.from(
+  JSON.stringify({ scp: ["openid", "offline_access", "user_data", "vehicle_device_data"] }),
+).toString("base64url")}.signature`;
 
 class MockTesla implements TeslaGateway {
   expectedNonce: string | null = null;
@@ -37,11 +40,10 @@ class MockTesla implements TeslaGateway {
     this.expectedNonce = input.expectedNonce;
     return {
       tokens: {
-        access_token: "test-access-token",
+        access_token: TEST_ACCESS_TOKEN,
         refresh_token: "test-refresh-token",
         token_type: "Bearer",
         expires_in: 3_600,
-        scope: "openid offline_access user_data",
       },
       subject: "subject",
     };
@@ -57,6 +59,7 @@ class MockTesla implements TeslaGateway {
         referenceNumber: "RN123456789",
         vin: "5YJ12345678901234",
         orderStatus: "BOOKED",
+        orderSubstatus: "AWAITING_VIN",
         modelCode: "m3",
         mktOptions: ["PPSW"],
         delivery: { street: "123 Private Road" },
@@ -88,7 +91,7 @@ function testConfig(directory: string, publicKeyFile: string): ServiceConfig {
     teslaTokenUrl: "https://auth.example/token",
     teslaOidcIssuer: "https://auth.example",
     teslaJwksUrl: "https://auth.example/jwks",
-    teslaScopes: ["openid", "offline_access", "user_data"],
+    teslaScopes: ["openid", "offline_access", "user_data", "vehicle_device_data"],
     teslaPublicKeyFile: publicKeyFile,
     oauthTransactionTtlSeconds: 600,
     requestTimeoutMs: 1_000,
@@ -144,14 +147,23 @@ test("service protects admin routes and completes a one-time OAuth callback", as
   });
   assert.equal(replay.statusCode, 400);
 
+  database.updateScopes("");
   const status = await app.inject({ method: "GET", url: "/api/status", headers: { authorization } });
   assert.equal(status.statusCode, 200);
   assert.equal(status.json().authorized, true);
+  assert.deepEqual(status.json().scopes, [
+    "openid",
+    "offline_access",
+    "user_data",
+    "vehicle_device_data",
+  ]);
+  assert.equal(database.loadTeslaTokens()?.scopes, "openid offline_access user_data vehicle_device_data");
 
   const orders = await app.inject({ method: "GET", url: "/api/orders", headers: { authorization } });
   assert.equal(orders.statusCode, 200);
   assert.doesNotMatch(orders.body, /RN123456789|5YJ12345678901234|123 Private Road/);
   assert.match(orders.body, /BOOKED/);
+  assert.match(orders.body, /AWAITING_VIN/);
 
   const schema = await app.inject({
     method: "GET",

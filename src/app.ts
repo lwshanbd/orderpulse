@@ -11,6 +11,7 @@ import { randomBase64Url, safeEqual } from "./crypto.js";
 import type { OrderPulseDatabase } from "./database.js";
 import { describeShape, sanitizeOrder } from "./redact.js";
 import { TeslaRequestError } from "./tesla.js";
+import { accessTokenScopes } from "./token-scopes.js";
 import type { TeslaGateway } from "./types.js";
 import type { TeslaTokenService } from "./token-service.js";
 
@@ -258,12 +259,18 @@ export function createApp({
 
   app.get("/api/status", { preHandler: requireAdmin }, async () => {
     const tokens = database.loadTeslaTokens();
+    const storedScopes = tokens?.scopes.split(/\s+/).filter(Boolean) ?? [];
+    const scopes =
+      storedScopes.length > 0 || !tokens ? storedScopes : accessTokenScopes(tokens.accessToken);
+    if (tokens && storedScopes.length === 0 && scopes.length > 0) {
+      database.updateScopes(scopes.join(" "));
+    }
     return {
       authorized: tokens !== null,
       ...(tokens
         ? {
             expiresAt: new Date(tokens.accessExpiresAt).toISOString(),
-            scopes: tokens.scopes.split(/\s+/).filter(Boolean),
+            scopes,
             fleetBaseUrl: tokens.fleetBaseUrl,
             updatedAt: new Date(tokens.updatedAt).toISOString(),
           }

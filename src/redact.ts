@@ -13,6 +13,7 @@ function safeString(value: unknown): string | null {
 export interface SanitizedOrder {
   referenceNumber: string | null;
   orderStatus: string | null;
+  orderSubstatus: string | null;
   modelCode: string | null;
   vin: string | null;
   marketOptions: string[];
@@ -29,6 +30,7 @@ export function sanitizeOrder(order: TeslaOrder): SanitizedOrder {
   return {
     referenceNumber: maskIdentifier(order.referenceNumber, 4),
     orderStatus: safeString(order.orderStatus),
+    orderSubstatus: safeString(order.orderSubstatus),
     modelCode: safeString(order.modelCode),
     vin: maskIdentifier(order.vin, 6),
     marketOptions,

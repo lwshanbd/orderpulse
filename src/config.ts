@@ -104,9 +104,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
     throw new Error("TOKEN_ENCRYPTION_KEY must be exactly 32 random bytes encoded as base64");
   }
 
-  const scopeString = env.TESLA_SCOPES?.trim() || "openid offline_access user_data";
+  const scopeString =
+    env.TESLA_SCOPES?.trim() || "openid offline_access user_data vehicle_device_data";
   const teslaScopes = [...new Set(scopeString.split(/\s+/).filter(Boolean))];
-  const allowedScopes = new Set(["openid", "offline_access", "user_data"]);
+  const allowedScopes = new Set([
+    "openid",
+    "offline_access",
+    "user_data",
+    "vehicle_device_data",
+  ]);
   const unexpectedScope = teslaScopes.find((scope) => !allowedScopes.has(scope));
   if (unexpectedScope) {
     throw new Error(`TESLA_SCOPES contains an unnecessary or unsupported scope: ${unexpectedScope}`);

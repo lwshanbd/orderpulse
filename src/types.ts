@@ -27,6 +27,7 @@ export interface OAuthTransaction {
 export interface TeslaOrder extends Record<string, unknown> {
   referenceNumber?: string;
   orderStatus?: string;
+  orderSubstatus?: string;
   modelCode?: string;
   vin?: string;
   mktOptions?: string | string[];

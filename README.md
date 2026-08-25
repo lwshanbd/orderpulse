@@ -23,9 +23,9 @@ OrderPulse 应用应保持以下设置：
 - Allowed Origin URL：`https://orderpulse.baodishan.com`
 - Allowed Redirect URI：`https://orderpulse.baodishan.com/oauth/tesla/callback`
 - Allowed Returned URL：目前留空
-- 用户授权 scopes：`openid offline_access user_data`
+- 用户授权 scopes：`openid offline_access user_data vehicle_device_data`
 
-Partner Account 已经注册成功，不需要因为这个 Service 再注册一次，也不需要车辆命令证书。订单读取不申请 `vehicle_cmds`、`vehicle_location` 等额外权限。
+Partner Account 已经注册成功，不需要因为这个 Service 再注册一次，也不需要车辆命令证书。真实验证表明订单读取需要 `vehicle_device_data`；仍不申请 `vehicle_cmds`、`vehicle_location` 等无关权限。
 
 ## 本地验证
 
@@ -107,7 +107,7 @@ curl -fsS https://orderpulse.baodishan.com/.well-known/appspecific/com.tesla.3p.
 
 `https://orderpulse.baodishan.com/oauth/tesla/start`
 
-输入 `orderpulse` 和 `admin_password.txt` 中的密码，登录 Tesla 并同意三项 scope。成功页面出现后，再用相同 Basic Auth 访问：
+输入 `orderpulse` 和 `admin_password.txt` 中的密码，登录 Tesla 并同意四项 scope。成功页面出现后，再用相同 Basic Auth 访问：
 
 - `https://orderpulse.baodishan.com/api/status`
 - `https://orderpulse.baodishan.com/api/orders`

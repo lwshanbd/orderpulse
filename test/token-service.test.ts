@@ -65,7 +65,7 @@ test("concurrent requests share one refresh and persist the rotated refresh toke
       refresh_token: "old-refresh",
       token_type: "Bearer",
       expires_in: 0,
-      scope: "openid offline_access user_data",
+      scope: "openid offline_access user_data vehicle_device_data",
     },
     fleetBaseUrl: FLEET_BASE_URL,
     subject: "subject",

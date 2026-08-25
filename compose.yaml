@@ -20,7 +20,7 @@ services:
       TESLA_CLIENT_ID_FILE: /run/secrets/tesla_client_id
       TESLA_CLIENT_SECRET_FILE: /run/secrets/tesla_client_secret
       TESLA_FLEET_BASE_URL: https://fleet-api.prd.na.vn.cloud.tesla.com
-      TESLA_SCOPES: openid offline_access user_data
+      TESLA_SCOPES: openid offline_access user_data vehicle_device_data
       TESLA_PUBLIC_KEY_FILE: /app/public/.well-known/appspecific/com.tesla.3p.public-key.pem
     secrets:
       - admin_password

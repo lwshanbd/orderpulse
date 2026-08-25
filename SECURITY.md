@@ -3,7 +3,7 @@
 - Tesla access tokens, rotating refresh tokens, and OAuth nonces are encrypted with AES-256-GCM before SQLite persistence.
 - Production refuses secrets supplied directly as environment values. Docker Compose mounts secret files under `/run/secrets`.
 - The OAuth callback is public by design, but its random `state` is single-use and expires after ten minutes. The ID token is verified against Tesla's JWKS, including issuer, audience, and nonce.
-- Only `openid offline_access user_data` scopes are accepted. Vehicle command and location scopes are intentionally rejected by configuration validation.
+- Only `openid offline_access user_data vehicle_device_data` scopes are accepted. Order access requires vehicle information, while vehicle command, charging-command, and location scopes are intentionally rejected by configuration validation.
 - Administrative endpoints use HTTPS plus Basic Authentication and a small in-memory failed-login limiter. Port 8787 is bound only to NAS loopback.
 - Order output is allow-listed and masks RN/VIN values. The schema endpoint returns field names and types, never raw values.
 - Application request logging is disabled so OAuth callback parameters and authorization headers are not written by OrderPulse. Reverse-proxy access-log policy remains a NAS responsibility.

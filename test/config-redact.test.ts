@@ -23,7 +23,12 @@ test("configuration limits OAuth scopes to order-read requirements", () => {
   );
 
   const config = loadConfig(developmentEnvironment());
-  assert.deepEqual(config.teslaScopes, ["openid", "offline_access", "user_data"]);
+  assert.deepEqual(config.teslaScopes, [
+    "openid",
+    "offline_access",
+    "user_data",
+    "vehicle_device_data",
+  ]);
   assert.equal(config.redirectUri, "https://orderpulse.baodishan.com/oauth/tesla/callback");
 });
 
@@ -39,6 +44,7 @@ test("order output masks identifiers and schema output contains no values", () =
     referenceNumber: "RN123456789",
     vin: "5YJ12345678901234",
     orderStatus: "BOOKED",
+    orderSubstatus: "AWAITING_VIN",
     modelCode: "m3",
     mktOptions: "PPSW, $MT322",
     delivery: { street: "123 Private Road", appointment: null },
@@ -48,6 +54,7 @@ test("order output masks identifiers and schema output contains no values", () =
   assert.equal(sanitized.referenceNumber, "•••••••6789");
   assert.equal(sanitized.vin, "•••••••••••901234");
   assert.equal(sanitized.orderStatus, "BOOKED");
+  assert.equal(sanitized.orderSubstatus, "AWAITING_VIN");
   assert.deepEqual(sanitized.marketOptions, ["PPSW", "$MT322"]);
 
   const shape = describeShape([order]);

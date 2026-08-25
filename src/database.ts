@@ -175,6 +175,12 @@ export class OrderPulseDatabase {
       .run(fleetBaseUrl, Date.now());
   }
 
+  updateScopes(scopes: string): void {
+    this.#database
+      .prepare("UPDATE tesla_tokens SET scopes = ? WHERE singleton_id = 1")
+      .run(scopes);
+  }
+
   hasTeslaTokens(): boolean {
     const row = this.#database
       .prepare("SELECT 1 AS present FROM tesla_tokens WHERE singleton_id = 1")

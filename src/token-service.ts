@@ -1,4 +1,5 @@
 import type { OrderPulseDatabase } from "./database.js";
+import { grantedScopes } from "./token-scopes.js";
 import type { TeslaGateway, TeslaOrder } from "./types.js";
 
 export class TeslaTokenService {
@@ -20,15 +21,19 @@ export class TeslaTokenService {
       code: input.code,
       expectedNonce: input.expectedNonce,
     });
+    const tokens = {
+      ...result.tokens,
+      scope: grantedScopes(result.tokens),
+    };
     this.#database.saveTeslaTokens({
-      tokens: result.tokens,
+      tokens,
       fleetBaseUrl: input.defaultFleetBaseUrl,
       subject: result.subject,
     });
 
     let fleetBaseUrl = input.defaultFleetBaseUrl;
     try {
-      const region = await this.#tesla.getRegion(result.tokens.access_token);
+      const region = await this.#tesla.getRegion(tokens.access_token);
       fleetBaseUrl = region.fleetBaseUrl;
       this.#database.updateFleetBaseUrl(fleetBaseUrl);
     } catch {
@@ -74,7 +79,7 @@ export class TeslaTokenService {
     const refreshed = await this.#tesla.refresh(stored.refreshToken);
     const tokens = {
       ...refreshed,
-      scope: refreshed.scope ?? stored.scopes,
+      scope: grantedScopes(refreshed, stored.scopes),
     };
     this.#database.saveTeslaTokens({
       tokens,
