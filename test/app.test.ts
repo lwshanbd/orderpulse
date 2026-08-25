@@ -132,12 +132,27 @@ test("service protects admin routes and completes a one-time OAuth callback", as
   assert.equal(unauthorized.statusCode, 401);
   const unauthorizedState = await app.inject({ method: "GET", url: "/api/order-state" });
   assert.equal(unauthorizedState.statusCode, 401);
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const missingCredentials = await app.inject({ method: "GET", url: "/api/status" });
+    assert.equal(missingCredentials.statusCode, 401);
+  }
+
+  const wrongAuthorization = `Basic ${Buffer.from("orderpulse:wrong-password").toString("base64")}`;
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    const wrongCredentials = await app.inject({
+      method: "GET",
+      url: "/api/status",
+      headers: { authorization: wrongAuthorization },
+    });
+    assert.equal(wrongCredentials.statusCode, attempt === 10 ? 429 : 401);
+  }
 
   const emptyStatus = await app.inject({
     method: "GET",
     url: "/api/status",
     headers: { authorization },
   });
+  assert.equal(emptyStatus.statusCode, 200);
   assert.equal(emptyStatus.json().authorized, false);
 
   const start = await app.inject({

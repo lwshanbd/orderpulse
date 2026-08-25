@@ -43,6 +43,7 @@ interface EventsQuery {
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1_000;
 const MAX_LOGIN_FAILURES = 10;
+const MAX_TRACKED_LOGIN_IPS = 1_024;
 
 function htmlPage(title: string, message: string): string {
   const escapedTitle = escapeHtml(title);
@@ -189,14 +190,19 @@ export function createApp({
 
   async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const now = Date.now();
-    const previous = loginAttempts.get(request.ip);
-    if (previous && previous.resetAt > now && previous.failures >= MAX_LOGIN_FAILURES) {
-      reply.header("Retry-After", Math.ceil((previous.resetAt - now) / 1_000));
-      await reply.code(429).send({ error: "too_many_attempts" });
-      return;
+    if (loginAttempts.size >= MAX_TRACKED_LOGIN_IPS) {
+      for (const [ip, attempt] of loginAttempts) {
+        if (attempt.resetAt <= now) loginAttempts.delete(ip);
+      }
+      while (loginAttempts.size >= MAX_TRACKED_LOGIN_IPS) {
+        const oldestIp = loginAttempts.keys().next().value as string | undefined;
+        if (!oldestIp) break;
+        loginAttempts.delete(oldestIp);
+      }
     }
-
-    const credentials = parseBasicAuthorization(request.headers.authorization);
+    const previous = loginAttempts.get(request.ip);
+    const authorizationHeader = request.headers.authorization;
+    const credentials = parseBasicAuthorization(authorizationHeader);
     const authorized =
       credentials !== undefined &&
       safeEqual(credentials[0], config.adminUsername) &&
@@ -207,10 +213,26 @@ export function createApp({
       return;
     }
 
+    reply.header("WWW-Authenticate", 'Basic realm="OrderPulse", charset="UTF-8"');
+    if (!authorizationHeader) {
+      await reply.code(401).send({ error: "unauthorized" });
+      return;
+    }
+
+    if (previous && previous.resetAt > now && previous.failures >= MAX_LOGIN_FAILURES) {
+      reply.header("Retry-After", Math.ceil((previous.resetAt - now) / 1_000));
+      await reply.code(429).send({ error: "too_many_attempts" });
+      return;
+    }
+
     const current = previous && previous.resetAt > now ? previous : { failures: 0, resetAt: now + LOGIN_WINDOW_MS };
     current.failures += 1;
     loginAttempts.set(request.ip, current);
-    reply.header("WWW-Authenticate", 'Basic realm="OrderPulse", charset="UTF-8"');
+    if (current.failures >= MAX_LOGIN_FAILURES) {
+      reply.header("Retry-After", Math.ceil((current.resetAt - now) / 1_000));
+      await reply.code(429).send({ error: "too_many_attempts" });
+      return;
+    }
     await reply.code(401).send({ error: "unauthorized" });
   }
 
