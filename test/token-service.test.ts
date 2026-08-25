@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { SecretBox } from "../src/crypto.js";
 import { OrderPulseDatabase } from "../src/database.js";
+import { TeslaRequestError } from "../src/tesla.js";
 import { TeslaTokenService } from "../src/token-service.js";
 import type {
   TeslaGateway,
@@ -19,6 +20,7 @@ const FLEET_BASE_URL = "https://fleet-api.prd.na.vn.cloud.tesla.com";
 
 class RefreshingTesla implements TeslaGateway {
   refreshCalls = 0;
+  regionCalls = 0;
 
   buildAuthorizationUrl(_input: { state: string; nonce: string }): URL {
     return new URL("https://example.com");
@@ -32,6 +34,7 @@ class RefreshingTesla implements TeslaGateway {
   }
 
   async getRegion(_accessToken: string): Promise<TeslaRegionResult> {
+    this.regionCalls += 1;
     return { raw: {}, fleetBaseUrl: FLEET_BASE_URL };
   }
 
@@ -76,7 +79,67 @@ test("concurrent requests share one refresh and persist the rotated refresh toke
   await Promise.all([service.getOrders(), service.getOrders()]);
 
   assert.equal(tesla.refreshCalls, 1);
+  assert.equal(tesla.regionCalls, 0);
   assert.equal(database.loadTeslaTokens()?.refreshToken, "new-refresh");
   assert.equal(database.loadTeslaTokens()?.accessToken, "new-access");
+  database.close();
+});
+
+test("an early 401 refreshes once and retries without a routine region request", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "orderpulse-early-401-"));
+  const database = new OrderPulseDatabase(
+    join(directory, "orderpulse.sqlite"),
+    new SecretBox(randomBytes(32)),
+  );
+  database.saveTeslaTokens({
+    tokens: {
+      access_token: "rejected-access",
+      refresh_token: "old-refresh",
+      token_type: "Bearer",
+      expires_in: 3_600,
+      scope: "openid offline_access user_data vehicle_device_data",
+    },
+    fleetBaseUrl: FLEET_BASE_URL,
+    subject: "subject",
+  });
+
+  let orderCalls = 0;
+  let refreshCalls = 0;
+  let regionCalls = 0;
+  const tesla: TeslaGateway = {
+    buildAuthorizationUrl: () => new URL("https://example.com"),
+    async exchangeAuthorizationCode() {
+      throw new Error("not used");
+    },
+    async getRegion() {
+      regionCalls += 1;
+      return { raw: {}, fleetBaseUrl: FLEET_BASE_URL };
+    },
+    async getOrders(accessToken) {
+      orderCalls += 1;
+      if (accessToken === "rejected-access") {
+        throw new TeslaRequestError({ message: "expired", status: 401 });
+      }
+      assert.equal(accessToken, "new-access");
+      return [];
+    },
+    async refresh(refreshToken) {
+      assert.equal(refreshToken, "old-refresh");
+      refreshCalls += 1;
+      return {
+        access_token: "new-access",
+        refresh_token: "new-refresh",
+        token_type: "Bearer",
+        expires_in: 3_600,
+      };
+    },
+  };
+
+  const service = new TeslaTokenService(database, tesla);
+  await service.getOrders();
+  assert.equal(orderCalls, 2);
+  assert.equal(refreshCalls, 1);
+  assert.equal(regionCalls, 0);
+  assert.equal(database.loadTeslaTokens()?.refreshToken, "new-refresh");
   database.close();
 });

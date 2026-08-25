@@ -81,3 +81,48 @@ test("OAuth state is one-time and expires", () => {
   assert.equal(database.consumeOAuthTransaction("expired", 1), null);
   database.close();
 });
+
+test("opening a first-stage database preserves authorization and adds order tables", () => {
+  const directory = mkdtempSync(join(tmpdir(), "orderpulse-migration-"));
+  const databasePath = join(directory, "orderpulse.sqlite");
+  const key = randomBytes(32);
+  const box = new SecretBox(key);
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`
+    CREATE TABLE oauth_transactions (
+      state TEXT PRIMARY KEY,
+      nonce_ciphertext TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE TABLE tesla_tokens (
+      singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+      access_ciphertext TEXT NOT NULL,
+      refresh_ciphertext TEXT NOT NULL,
+      token_type TEXT NOT NULL,
+      access_expires_at INTEGER NOT NULL,
+      scopes TEXT NOT NULL,
+      fleet_base_url TEXT NOT NULL,
+      subject TEXT,
+      updated_at INTEGER NOT NULL
+    ) STRICT;
+  `);
+  legacy
+    .prepare(
+      `INSERT INTO tesla_tokens VALUES (1, ?, ?, 'Bearer', ?, ?, ?, 'subject', ?)`,
+    )
+    .run(
+      box.encrypt("existing-access"),
+      box.encrypt("existing-refresh"),
+      Date.now() + 3_600_000,
+      "openid offline_access user_data vehicle_device_data",
+      "https://fleet-api.prd.na.vn.cloud.tesla.com",
+      Date.now(),
+    );
+  legacy.close();
+
+  const migrated = new OrderPulseDatabase(databasePath, box);
+  assert.equal(migrated.loadTeslaTokens()?.accessToken, "existing-access");
+  assert.deepEqual(migrated.listOrderSnapshots(), []);
+  assert.deepEqual(migrated.listOrderEvents(), []);
+  migrated.close();
+});

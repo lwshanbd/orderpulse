@@ -7,4 +7,7 @@ data
 secrets
 .env*
 *.log
+*.p8
+private-key.pem
+public/.well-known/appspecific/com.tesla.3p.public-key.pem
 README.md

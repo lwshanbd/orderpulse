@@ -1,6 +1,6 @@
 # OrderPulse Service
 
-这是 OrderPulse 的第一阶段后台：运行在 NAS 上，完成 Tesla 用户 OAuth、加密保存 token、自动刷新 token、检测 Fleet API 区域，以及读取并脱敏展示订单。它暂时不发送 APNs；先用真实账号确认 `/api/1/users/orders` 的返回结构，再据此固定状态映射并接 iOS 推送，能避免凭猜测做错提醒逻辑。
+这是运行在 NAS 上的 OrderPulse 后台：完成 Tesla 用户 OAuth、加密保存和自动刷新 token、读取订单、建立隐私安全的状态快照，并记录可供后续 APNs 使用的变化事件。APNs 与 iOS 客户端仍属于下一阶段。
 
 ## 已实现
 
@@ -9,8 +9,12 @@
 - `GET /oauth/tesla/start`：管理员登录后开始 Tesla 授权。
 - `GET /oauth/tesla/callback`：Tesla 回调；校验一次性 state、OIDC issuer/audience/nonce。
 - `GET /api/status`：只返回授权是否存在、有效期、scope 和 Fleet 区域。
-- `GET /api/orders`：只返回允许的订单字段，RN 仅保留末 4 位，VIN 仅保留末 6 位。
+- `GET /api/orders`：立即调用 Tesla、更新快照，并只返回脱敏订单。这个请求可能产生 Tesla 计费使用量。
 - `GET /api/orders/schema`：返回原始响应的字段路径和数据类型，不返回字段值。这个接口用于第一次适配真实 Tesla 响应。
+- `GET /api/order-state`：只读 SQLite 中的最新快照，不调用 Tesla。
+- `GET /api/events?limit=50`：只读状态变化历史，不调用 Tesla。
+- `GET /api/polling/status`：返回调度配置、下次运行时间和最近一次结果。
+- `POST /api/polling/run`：手动执行一次查询与变化检测。
 - `DELETE /api/authorization`：删除 NAS 上保存的 Tesla 授权。
 
 除健康检查、公钥和 Tesla 回调外，所有接口都受 HTTPS Basic Auth 保护。
@@ -39,6 +43,19 @@ npm run build
 ```
 
 开发环境可以复制 `.env.example` 为 `.env`，但本项目不会自动加载 `.env`。启动前需由 shell 或开发工具显式载入环境变量。不要在生产 NAS 使用直接的 secret 环境变量。
+
+## 状态变化规则
+
+- 完整 RN 永远不写入快照表。`orderId` 是用独立派生密钥计算的 HMAC，界面只得到 RN 末 4 位。
+- 第一次成功查询创建 `baseline_created`，不具备通知资格。
+- `orderStatus` 或 `orderSubstatus` 变化时创建一次 `status_changed`。
+- 配置代码变化会记录 `configuration_changed`，但默认不用于推送。
+- active orders 列表连续三次没有某个订单后才创建 `order_inactive`，避免把短暂空响应误判为交付或取消。
+- inactive 订单重新出现时创建 `order_reappeared`。
+- 查询失败只记录安全错误码，不修改订单快照，也不会制造事件。
+- 同一进程中的并发手动/定时查询会共享一次 Tesla 请求。
+
+正常订单查询不再重复调用 `/users/region`；区域只在 OAuth 时检测，或 Tesla 明确返回区域错误时重新检测。401 会刷新 rotating refresh token 并只重试一次。
 
 ## NAS 部署目录
 
@@ -82,6 +99,29 @@ docker compose ps
 ```
 
 `secrets` 目录本身为 mode 700，因此其他 NAS 用户无法遍历；文件使用 mode 644 是为了让容器内的非 root 用户能够读取 Docker Compose 的只读 secret bind mount。若 NAS 上该目录不属于当前管理员，请用 DSM ACL 达到同样效果。`data` 需要由镜像内 UID 1000 的非 root 用户写入。如果你的 NAS 已占用 UID 1000 或不允许这样设置，改用 DSM ACL 给该 UID 对 `data` 的读写权限，不要把容器改为 root，也不要把 secret 改成环境变量。
+
+## 启用定时轮询
+
+Tesla Fleet API 按使用量计费，所有低于 HTTP 500 的请求通常都会计入使用量。先在 Tesla Developer Dashboard 设置支付方式、较低的 Billing Limit，并查看当前 pricing category。OrderPulse 默认关闭后台轮询，避免一次部署意外产生持续费用。
+
+部署新版本后，先手动建立基线；`curl -u orderpulse` 会交互式询问密码，不要把密码写进命令参数：
+
+```sh
+curl -u orderpulse -X POST https://orderpulse.baodishan.com/api/polling/run
+curl -u orderpulse https://orderpulse.baodishan.com/api/order-state
+curl -u orderpulse https://orderpulse.baodishan.com/api/events
+```
+
+确认第一条事件为 `baseline_created` 且 `notificationEligible=false` 后，在部署目录创建一个不提交 Git 的 `.env`：
+
+```text
+ORDER_POLLING_ENABLED=true
+ORDER_POLL_INTERVAL_SECONDS=1800
+ORDER_POLL_JITTER_SECONDS=60
+ORDER_MISSING_THRESHOLD=3
+```
+
+再执行 `docker compose up -d`。默认每 30 分钟查询一次，并加入最多 60 秒随机抖动；失败时指数退避，最长六小时，Tesla 返回 `Retry-After` 时也会遵守。可以通过 `/api/polling/status` 检查运行情况。
 
 ## Synology 反向代理
 

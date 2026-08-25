@@ -9,6 +9,8 @@ import { createApp } from "../src/app.js";
 import type { ServiceConfig } from "../src/config.js";
 import { SecretBox } from "../src/crypto.js";
 import { OrderPulseDatabase } from "../src/database.js";
+import { OrderIdentity } from "../src/order-identity.js";
+import { OrderMonitor } from "../src/order-monitor.js";
 import { TeslaTokenService } from "../src/token-service.js";
 import type {
   TeslaGateway,
@@ -96,6 +98,10 @@ function testConfig(directory: string, publicKeyFile: string): ServiceConfig {
     oauthTransactionTtlSeconds: 600,
     requestTimeoutMs: 1_000,
     requireIdToken: false,
+    orderPollingEnabled: false,
+    orderPollingIntervalSeconds: 1_800,
+    orderPollingJitterSeconds: 60,
+    orderMissingThreshold: 3,
   };
 }
 
@@ -107,7 +113,16 @@ test("service protects admin routes and completes a one-time OAuth callback", as
   const database = new OrderPulseDatabase(config.databasePath, new SecretBox(config.tokenEncryptionKey));
   const tesla = new MockTesla();
   const tokenService = new TeslaTokenService(database, tesla);
-  const app = createApp({ config, database, tesla, tokenService });
+  const orderMonitor = new OrderMonitor({
+    database,
+    tokenService,
+    identity: new OrderIdentity(config.tokenEncryptionKey),
+    enabled: false,
+    intervalSeconds: config.orderPollingIntervalSeconds,
+    jitterSeconds: config.orderPollingJitterSeconds,
+    missingThreshold: config.orderMissingThreshold,
+  });
+  const app = createApp({ config, database, tesla, tokenService, orderMonitor });
   const authorization = `Basic ${Buffer.from("orderpulse:a-long-test-password").toString("base64")}`;
 
   const health = await app.inject({ method: "GET", url: "/healthz" });
@@ -115,6 +130,8 @@ test("service protects admin routes and completes a one-time OAuth callback", as
 
   const unauthorized = await app.inject({ method: "GET", url: "/api/status" });
   assert.equal(unauthorized.statusCode, 401);
+  const unauthorizedState = await app.inject({ method: "GET", url: "/api/order-state" });
+  assert.equal(unauthorizedState.statusCode, 401);
 
   const emptyStatus = await app.inject({
     method: "GET",
@@ -164,6 +181,32 @@ test("service protects admin routes and completes a one-time OAuth callback", as
   assert.doesNotMatch(orders.body, /RN123456789|5YJ12345678901234|123 Private Road/);
   assert.match(orders.body, /BOOKED/);
   assert.match(orders.body, /AWAITING_VIN/);
+
+  const stateResponse = await app.inject({
+    method: "GET",
+    url: "/api/order-state",
+    headers: { authorization },
+  });
+  assert.equal(stateResponse.statusCode, 200);
+  assert.match(stateResponse.body, /AWAITING_VIN/);
+  assert.doesNotMatch(stateResponse.body, /RN123456789|5YJ12345678901234|123 Private Road/);
+
+  const events = await app.inject({
+    method: "GET",
+    url: "/api/events",
+    headers: { authorization },
+  });
+  assert.equal(events.statusCode, 200);
+  assert.match(events.body, /baseline_created/);
+
+  const polling = await app.inject({
+    method: "GET",
+    url: "/api/polling/status",
+    headers: { authorization },
+  });
+  assert.equal(polling.statusCode, 200);
+  assert.equal(polling.json().enabled, false);
+  assert.equal(polling.json().latestRun.outcome, "success");
 
   const schema = await app.inject({
     method: "GET",

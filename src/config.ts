@@ -27,6 +27,10 @@ export interface ServiceConfig {
   oauthTransactionTtlSeconds: number;
   requestTimeoutMs: number;
   requireIdToken: boolean;
+  orderPollingEnabled: boolean;
+  orderPollingIntervalSeconds: number;
+  orderPollingJitterSeconds: number;
+  orderMissingThreshold: number;
 }
 
 function readConfiguredValue(
@@ -67,6 +71,14 @@ function parsePositiveInteger(value: string | undefined, fallback: number, name:
   return parsed;
 }
 
+function parseNonNegativeInteger(value: string | undefined, fallback: number, name: string): number {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback;
   if (value === "true") return true;
@@ -78,6 +90,36 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
   const nodeEnv = environmentSchema.parse(env.NODE_ENV ?? "development");
   const production = nodeEnv === "production";
   const dataDir = resolve(env.DATA_DIR ?? "./data");
+  const port = parsePositiveInteger(env.PORT, 8787, "PORT");
+  if (port > 65_535) throw new Error("PORT must not exceed 65535");
+  const orderPollingEnabled = parseBoolean(env.ORDER_POLLING_ENABLED, false);
+  const orderPollingIntervalSeconds = parsePositiveInteger(
+    env.ORDER_POLL_INTERVAL_SECONDS,
+    1_800,
+    "ORDER_POLL_INTERVAL_SECONDS",
+  );
+  if (production && orderPollingEnabled && orderPollingIntervalSeconds < 300) {
+    throw new Error("ORDER_POLL_INTERVAL_SECONDS must be at least 300 in production");
+  }
+  if (orderPollingIntervalSeconds > 86_400) {
+    throw new Error("ORDER_POLL_INTERVAL_SECONDS must not exceed 86400");
+  }
+  const orderPollingJitterSeconds = parseNonNegativeInteger(
+    env.ORDER_POLL_JITTER_SECONDS,
+    60,
+    "ORDER_POLL_JITTER_SECONDS",
+  );
+  if (orderPollingJitterSeconds > 3_600) {
+    throw new Error("ORDER_POLL_JITTER_SECONDS must not exceed 3600");
+  }
+  const orderMissingThreshold = parsePositiveInteger(
+    env.ORDER_MISSING_THRESHOLD,
+    3,
+    "ORDER_MISSING_THRESHOLD",
+  );
+  if (orderMissingThreshold > 100) {
+    throw new Error("ORDER_MISSING_THRESHOLD must not exceed 100");
+  }
 
   const publicUrl = new URL(env.PUBLIC_BASE_URL ?? "https://orderpulse.baodishan.com");
   if (publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash) {
@@ -126,7 +168,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
   return {
     nodeEnv,
     host: env.HOST?.trim() || "127.0.0.1",
-    port: parsePositiveInteger(env.PORT, 8787, "PORT"),
+    port,
     dataDir,
     databasePath: resolve(dataDir, "orderpulse.sqlite"),
     publicBaseUrl: publicUrl.origin,
@@ -163,5 +205,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
     ),
     requestTimeoutMs: parsePositiveInteger(env.REQUEST_TIMEOUT_MS, 10_000, "REQUEST_TIMEOUT_MS"),
     requireIdToken: parseBoolean(env.TESLA_REQUIRE_ID_TOKEN, true),
+    orderPollingEnabled,
+    orderPollingIntervalSeconds,
+    orderPollingJitterSeconds,
+    orderMissingThreshold,
   };
 }

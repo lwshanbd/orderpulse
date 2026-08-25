@@ -30,6 +30,27 @@ test("configuration limits OAuth scopes to order-read requirements", () => {
     "vehicle_device_data",
   ]);
   assert.equal(config.redirectUri, "https://orderpulse.baodishan.com/oauth/tesla/callback");
+  assert.equal(config.orderPollingEnabled, false);
+  assert.equal(config.orderPollingIntervalSeconds, 1_800);
+  assert.equal(config.orderMissingThreshold, 3);
+});
+
+test("polling configuration is explicit and validated", () => {
+  const config = loadConfig({
+    ...developmentEnvironment(),
+    ORDER_POLLING_ENABLED: "true",
+    ORDER_POLL_INTERVAL_SECONDS: "900",
+    ORDER_POLL_JITTER_SECONDS: "0",
+    ORDER_MISSING_THRESHOLD: "4",
+  });
+  assert.equal(config.orderPollingEnabled, true);
+  assert.equal(config.orderPollingIntervalSeconds, 900);
+  assert.equal(config.orderPollingJitterSeconds, 0);
+  assert.equal(config.orderMissingThreshold, 4);
+  assert.throws(
+    () => loadConfig({ ...developmentEnvironment(), ORDER_POLLING_ENABLED: "yes" }),
+    /boolean/,
+  );
 });
 
 test("production requires secrets to come from files", () => {

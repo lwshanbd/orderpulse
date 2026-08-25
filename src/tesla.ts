@@ -29,23 +29,36 @@ export class TeslaRequestError extends Error {
   readonly status: number;
   readonly code: string | null;
   readonly transactionId: string | null;
+  readonly retryAfterSeconds: number | null;
 
   constructor(input: {
     message: string;
     status: number;
     code?: string | null;
     transactionId?: string | null;
+    retryAfterSeconds?: number | null;
   }) {
     super(input.message);
     this.name = "TeslaRequestError";
     this.status = input.status;
     this.code = input.code ?? null;
     this.transactionId = input.transactionId ?? null;
+    this.retryAfterSeconds = input.retryAfterSeconds ?? null;
   }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseRetryAfterSeconds(value: string | null): number | null {
+  if (!value) return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return Math.ceil(numeric);
+  const retryAt = Date.parse(value);
+  if (!Number.isFinite(retryAt)) return null;
+  const seconds = Math.ceil((retryAt - Date.now()) / 1_000);
+  return seconds > 0 ? seconds : null;
 }
 
 function assertTokenResponse(value: unknown): TeslaTokenResponse {
@@ -231,6 +244,7 @@ export class TeslaClient implements TeslaGateway {
         status: response.status,
         code,
         transactionId,
+        retryAfterSeconds: parseRetryAfterSeconds(response.headers.get("retry-after")),
       });
     }
     return parsed;

@@ -22,6 +22,10 @@ services:
       TESLA_FLEET_BASE_URL: https://fleet-api.prd.na.vn.cloud.tesla.com
       TESLA_SCOPES: openid offline_access user_data vehicle_device_data
       TESLA_PUBLIC_KEY_FILE: /app/public/.well-known/appspecific/com.tesla.3p.public-key.pem
+      ORDER_POLLING_ENABLED: "${ORDER_POLLING_ENABLED:-false}"
+      ORDER_POLL_INTERVAL_SECONDS: "${ORDER_POLL_INTERVAL_SECONDS:-1800}"
+      ORDER_POLL_JITTER_SECONDS: "${ORDER_POLL_JITTER_SECONDS:-60}"
+      ORDER_MISSING_THRESHOLD: "${ORDER_MISSING_THRESHOLD:-3}"
     secrets:
       - admin_password
       - token_encryption_key

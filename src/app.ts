@@ -9,6 +9,8 @@ import Fastify, {
 import type { ServiceConfig } from "./config.js";
 import { randomBase64Url, safeEqual } from "./crypto.js";
 import type { OrderPulseDatabase } from "./database.js";
+import type { OrderMonitor } from "./order-monitor.js";
+import type { OrderEvent, OrderSnapshot, PollRun } from "./order-types.js";
 import { describeShape, sanitizeOrder } from "./redact.js";
 import { TeslaRequestError } from "./tesla.js";
 import { accessTokenScopes } from "./token-scopes.js";
@@ -20,6 +22,7 @@ interface AppDependencies {
   database: OrderPulseDatabase;
   tesla: TeslaGateway;
   tokenService: TeslaTokenService;
+  orderMonitor: OrderMonitor;
 }
 
 interface CallbackQuery {
@@ -32,6 +35,10 @@ interface CallbackQuery {
 interface LoginAttempt {
   failures: number;
   resetAt: number;
+}
+
+interface EventsQuery {
+  limit?: string;
 }
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1_000;
@@ -114,11 +121,43 @@ function publicError(error: unknown): { statusCode: number; body: Record<string,
   };
 }
 
+function isoTime(value: number | null): string | null {
+  return value === null ? null : new Date(value).toISOString();
+}
+
+function serializeSnapshot(snapshot: OrderSnapshot): Record<string, unknown> {
+  return {
+    ...snapshot,
+    firstSeenAt: isoTime(snapshot.firstSeenAt),
+    lastSeenAt: isoTime(snapshot.lastSeenAt),
+    lastChangedAt: isoTime(snapshot.lastChangedAt),
+    inactiveAt: isoTime(snapshot.inactiveAt),
+  };
+}
+
+function serializeEvent(event: OrderEvent): Record<string, unknown> {
+  return {
+    ...event,
+    notificationDeliveredAt: isoTime(event.notificationDeliveredAt),
+    createdAt: isoTime(event.createdAt),
+  };
+}
+
+function serializePollRun(run: PollRun | null): Record<string, unknown> | null {
+  if (!run) return null;
+  return {
+    ...run,
+    startedAt: isoTime(run.startedAt),
+    finishedAt: isoTime(run.finishedAt),
+  };
+}
+
 export function createApp({
   config,
   database,
   tesla,
   tokenService,
+  orderMonitor,
 }: AppDependencies): FastifyInstance {
   const app = Fastify({
     logger: false,
@@ -280,8 +319,53 @@ export function createApp({
 
   app.get("/api/orders", { preHandler: requireAdmin }, async (_request, reply) => {
     try {
-      const orders = await tokenService.getOrders();
-      return { count: orders.length, orders: orders.map(sanitizeOrder) };
+      const result = await orderMonitor.pollNow("live_api");
+      return {
+        count: result.orders.length,
+        orders: result.orders.map(sanitizeOrder),
+        reconciliation: result.reconciliation,
+        polledAt: new Date(result.finishedAt).toISOString(),
+      };
+    } catch (caught) {
+      const safe = publicError(caught);
+      return reply.code(safe.statusCode).send(safe.body);
+    }
+  });
+
+  app.get("/api/order-state", { preHandler: requireAdmin }, async () => {
+    const orders = database.listOrderSnapshots().map(serializeSnapshot);
+    return { count: orders.length, orders };
+  });
+
+  app.get<{ Querystring: EventsQuery }>(
+    "/api/events",
+    { preHandler: requireAdmin },
+    async (request) => {
+      const requestedLimit = Number(request.query.limit ?? 50);
+      const limit = Number.isSafeInteger(requestedLimit) ? requestedLimit : 50;
+      const events = database.listOrderEvents(limit).map(serializeEvent);
+      return { count: events.length, events };
+    },
+  );
+
+  app.get("/api/polling/status", { preHandler: requireAdmin }, async () => {
+    const status = orderMonitor.status();
+    return {
+      ...status,
+      nextPollAt: isoTime(status.nextPollAt),
+      latestRun: serializePollRun(status.latestRun),
+    };
+  });
+
+  app.post("/api/polling/run", { preHandler: requireAdmin }, async (_request, reply) => {
+    try {
+      const result = await orderMonitor.pollNow("manual");
+      return {
+        pollRunId: result.pollRunId,
+        orderCount: result.orders.length,
+        reconciliation: result.reconciliation,
+        finishedAt: new Date(result.finishedAt).toISOString(),
+      };
     } catch (caught) {
       const safe = publicError(caught);
       return reply.code(safe.statusCode).send(safe.body);

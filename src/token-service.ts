@@ -1,4 +1,5 @@
 import type { OrderPulseDatabase } from "./database.js";
+import { TeslaRequestError } from "./tesla.js";
 import { grantedScopes } from "./token-scopes.js";
 import type { TeslaGateway, TeslaOrder } from "./types.js";
 
@@ -37,7 +38,7 @@ export class TeslaTokenService {
       fleetBaseUrl = region.fleetBaseUrl;
       this.#database.updateFleetBaseUrl(fleetBaseUrl);
     } catch {
-      // The token is still safely stored. The region call is retried before order retrieval.
+      // The token is still safely stored and the configured regional base URL remains usable.
     }
     return { fleetBaseUrl, subject: result.subject };
   }
@@ -46,18 +47,35 @@ export class TeslaTokenService {
     const accessToken = await this.#getValidAccessToken();
     const stored = this.#database.loadTeslaTokens();
     if (!stored) throw new Error("Tesla authorization is not configured");
-
-    let fleetBaseUrl = stored.fleetBaseUrl;
     try {
-      const region = await this.#tesla.getRegion(accessToken);
-      fleetBaseUrl = region.fleetBaseUrl;
-      if (fleetBaseUrl !== stored.fleetBaseUrl) {
-        this.#database.updateFleetBaseUrl(fleetBaseUrl);
-      }
-    } catch {
-      // The configured base URL is used if the nonessential region lookup is unavailable.
+      return await this.#getOrdersWithRegionRecovery(accessToken, stored.fleetBaseUrl);
+    } catch (error) {
+      if (!(error instanceof TeslaRequestError) || error.status !== 401) throw error;
+      const refreshedAccessToken = await this.#forceRefresh(accessToken);
+      const refreshedStored = this.#database.loadTeslaTokens();
+      if (!refreshedStored) throw new Error("Tesla authorization is not configured");
+      return this.#getOrdersWithRegionRecovery(
+        refreshedAccessToken,
+        refreshedStored.fleetBaseUrl,
+      );
     }
-    return this.#tesla.getOrders(accessToken, fleetBaseUrl);
+  }
+
+  async #getOrdersWithRegionRecovery(
+    accessToken: string,
+    fleetBaseUrl: string,
+  ): Promise<TeslaOrder[]> {
+    try {
+      return await this.#tesla.getOrders(accessToken, fleetBaseUrl);
+    } catch (error) {
+      const regionRelated =
+        error instanceof TeslaRequestError &&
+        (error.status === 421 || error.code?.toLowerCase().includes("region") === true);
+      if (!regionRelated) throw error;
+      const region = await this.#tesla.getRegion(accessToken);
+      this.#database.updateFleetBaseUrl(region.fleetBaseUrl);
+      return this.#tesla.getOrders(accessToken, region.fleetBaseUrl);
+    }
   }
 
   async #getValidAccessToken(): Promise<string> {
@@ -69,6 +87,18 @@ export class TeslaTokenService {
 
     if (!this.#refreshInFlight) {
       this.#refreshInFlight = this.#refresh(stored).finally(() => {
+        this.#refreshInFlight = null;
+      });
+    }
+    return this.#refreshInFlight;
+  }
+
+  async #forceRefresh(rejectedAccessToken: string): Promise<string> {
+    const current = this.#database.loadTeslaTokens();
+    if (!current) throw new Error("Tesla authorization is not configured");
+    if (current.accessToken !== rejectedAccessToken) return current.accessToken;
+    if (!this.#refreshInFlight) {
+      this.#refreshInFlight = this.#refresh(current).finally(() => {
         this.#refreshInFlight = null;
       });
     }
