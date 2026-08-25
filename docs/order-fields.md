@@ -24,14 +24,20 @@
 
 当前 Fleet API 真实响应没有 VIN、交付地点、预约时间或预计交付日期；Tesla 公开文档也没有受支持的订单交付详情 endpoint。
 
-进一步调查发现，Tesla 自有 App 使用的未公开 delivery API 可能包含以下字段：
+Owner 授权实测成功后，Tesla 自有 App 使用的未公开 delivery API 已确认包含以下字段：
 
 - `tasks.scheduling.deliveryWindowDisplay`：预计交付窗口
-- `tasks.scheduling.apptDateTimeAddressStr`：交付预约
+- `tasks.scheduling.deliveryAppointmentDate`：交付预约日期
+- `tasks.scheduling.strings.apptDateTimeStringRange`：适合展示的预约时段
+- `tasks.scheduling.appointmentStatusName`：预约状态
+- `tasks.scheduling.isValidAppointment`：预约是否有效
+- `tasks.scheduling.isEligibleForReschedule`：是否可改期
+- `tasks.scheduling.isDeliveryEstimatesEnabled`：是否提供交付预估
 - `tasks.finalPayment.data.etaToDeliveryCenter`：到达交付中心的 ETA
+- `strings.vin`：Tesla 分配 VIN 后出现
 
-Fleet API 的第三方 token 已实测无法访问该服务。因此 OrderPulse 现在使用一个独立的个人 Owner PKCE 授权读取这些内容，官方 Fleet 授权仍作为未连接 Owner 时的基础字段后备。Owner 授权不会让 NAS 接触 Tesla 密码或 MFA，也不申请车辆命令权限。
+Fleet API 的第三方 token 已实测无法访问该服务。因此 OrderPulse 使用一个独立的个人 Owner PKCE 授权读取这些内容，官方 Fleet 授权仍作为未连接 Owner 时的基础字段后备。Owner 授权不会让 NAS 接触 Tesla 密码或 MFA，也不申请车辆命令权限。
 
-后台只保留经过白名单筛选的交付窗口、预约、交付方式/中心、运输 ETA、VIN 是否分配、交付顾问状态以及 Tesla App 任务的简短标题/完成状态。VIN 和车牌先掩码，任务中的自由文本、跳转目标和未知字段全部丢弃。第一次取得详情时只建立静默基线；之后任一白名单交付字段变化才生成可推送事件。
+后台只保留经过白名单筛选的交付窗口、预约日期与状态、是否可改期、交付方式/中心、运输 ETA、VIN 是否分配、交付顾问状态以及 Tesla App 任务的简短标题/完成状态。VIN 和车牌先掩码，任务中的自由文本、跳转目标和未知字段全部丢弃。第一次取得详情时只建立静默基线；之后任一白名单交付字段变化才生成可推送事件。
 
 `/api/order-details/schema` 仍可供管理员检查当前账号实际返回的字段结构，但不会返回字段值。由于这是 Tesla 自有 App 使用的未公开接口，其 URL 和 schema 都可能变化；OrderPulse 会在失败时保留最后一份成功快照，不把接口错误误报成订单变化。

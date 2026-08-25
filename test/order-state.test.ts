@@ -112,6 +112,10 @@ test("Owner delivery details establish a silent baseline and later changes notif
     vinAssigned: false,
     deliveryWindow: "September 13 - September 30",
     appointment: null,
+    appointmentStatus: null,
+    appointmentValid: null,
+    rescheduleEligible: null,
+    deliveryEstimatesEnabled: true,
     etaToDeliveryCenter: null,
     vehicleLocation: null,
     deliveryMethod: "PICKUP_SERVICE_CENTER",
@@ -135,14 +139,18 @@ test("Owner delivery details establish a silent baseline and later changes notif
 
   const changed = identity.normalize({
     ...baseOrder,
-    orderPulseDelivery: { ...delivery, deliveryWindow: "September 20 - September 25" },
+    orderPulseDelivery: {
+      ...delivery,
+      deliveryWindow: "September 20 - September 25",
+      appointmentStatus: "READY_TO_SCHEDULE",
+    },
   });
   assert.ok(changed);
   const update = database.reconcileOrders([changed], 3, 3_000);
   assert.equal(update.notificationEligibleCount, 1);
   const event = database.listOrderEvents()[0];
   assert.equal(event?.type, "configuration_changed");
-  assert.match(event?.currentSubstatus ?? "", /September 20/);
+  assert.match(event?.currentSubstatus ?? "", /READY_TO_SCHEDULE/);
 
   database.reconcileOrders([fleetBaseline], 3, 4_000);
   assert.equal(

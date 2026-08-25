@@ -33,6 +33,15 @@ function normalizeDelivery(order: TeslaOrder): TrackedOrder["delivery"] {
     vinAssigned: delivery.vinAssigned === true,
     deliveryWindow: optionalString(delivery.deliveryWindow, 512),
     appointment: optionalString(delivery.appointment, 1_024),
+    appointmentStatus: optionalString(delivery.appointmentStatus, 256),
+    appointmentValid:
+      typeof delivery.appointmentValid === "boolean" ? delivery.appointmentValid : null,
+    rescheduleEligible:
+      typeof delivery.rescheduleEligible === "boolean" ? delivery.rescheduleEligible : null,
+    deliveryEstimatesEnabled:
+      typeof delivery.deliveryEstimatesEnabled === "boolean"
+        ? delivery.deliveryEstimatesEnabled
+        : null,
     etaToDeliveryCenter: optionalString(delivery.etaToDeliveryCenter, 512),
     vehicleLocation: optionalString(delivery.vehicleLocation, 512),
     deliveryMethod: optionalString(delivery.deliveryMethod, 256),

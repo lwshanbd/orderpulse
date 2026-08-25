@@ -53,6 +53,10 @@ struct DeliveryDetails: Decodable, Equatable {
     let vinAssigned: Bool
     let deliveryWindow: String?
     let appointment: String?
+    let appointmentStatus: String?
+    let appointmentValid: Bool?
+    let rescheduleEligible: Bool?
+    let deliveryEstimatesEnabled: Bool?
     let etaToDeliveryCenter: String?
     let vehicleLocation: String?
     let deliveryMethod: String?
@@ -69,7 +73,7 @@ struct DeliveryDetails: Decodable, Equatable {
     let tasks: [OrderTaskSummary]
 
     var hasUsefulData: Bool {
-        vinAssigned || deliveryWindow != nil || appointment != nil ||
+        vinAssigned || deliveryWindow != nil || appointment != nil || appointmentStatus != nil ||
         etaToDeliveryCenter != nil || deliveryMethod != nil ||
         deliveryCenter != nil || !tasks.isEmpty
     }

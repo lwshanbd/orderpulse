@@ -266,6 +266,15 @@ private struct DeliveryDetailsView: View {
             if let appointment = details.appointment {
                 DetailRow(icon: "calendar.badge.checkmark", label: "交付预约", value: appointment, color: .green)
             }
+            if let status = details.appointmentStatus {
+                DetailRow(icon: "clock.badge.checkmark", label: "预约状态", value: status.orderPulseDisplayCode, color: .green)
+            }
+            if let valid = details.appointmentValid {
+                DetailRow(icon: "checkmark.seal.fill", label: "预约有效", value: valid ? "是" : "否", color: valid ? .green : .orange)
+            }
+            if let eligible = details.rescheduleEligible {
+                DetailRow(icon: "calendar.badge.clock", label: "可以改期", value: eligible ? "是" : "否", color: .purple)
+            }
             if let eta = details.etaToDeliveryCenter {
                 DetailRow(icon: "truck.box.fill", label: "到店 ETA", value: DateText.display(eta), color: .orange)
             }

@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { connect, type IncomingHttpHeaders } from "node:http2";
 
 import type {
   OrderDeliveryDetails,
@@ -19,70 +18,36 @@ const OWNER_DETAILS_URL = "https://akamai-apigateway-vfx.tesla.com/tasks";
 
 interface OwnerHttpResponse {
   status: number;
-  headers: IncomingHttpHeaders;
+  headers: Headers;
   text: string;
 }
 
-async function http2Request(input: {
-  url: URL;
-  method: "GET" | "POST";
-  headers: Record<string, string>;
-  body?: string;
-  timeoutMs: number;
-}): Promise<OwnerHttpResponse> {
-  return new Promise((resolve, reject) => {
-    const session = connect(input.url.origin);
-    let settled = false;
-    let responseHeaders: IncomingHttpHeaders = {};
-    let responseText = "";
-
-    const finish = (error?: Error): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      if (error) {
-        session.destroy();
-        reject(error);
-      } else {
-        session.close();
-        resolve({
-          status: Number(responseHeaders[":status"] ?? 0),
-          headers: responseHeaders,
-          text: responseText,
-        });
-      }
-    };
-
-    const timeout = setTimeout(
-      () => finish(new Error("Tesla owner request timed out")),
-      input.timeoutMs,
-    );
-    session.once("error", (error) => finish(error));
-    const request = session.request({
-      ":method": input.method,
-      ":path": `${input.url.pathname}${input.url.search}`,
-      ...input.headers,
-    });
-    request.setEncoding("utf8");
-    request.once("response", (headers) => {
-      responseHeaders = headers;
-    });
-    request.on("data", (chunk: string) => {
-      responseText += chunk;
-      if (responseText.length > 5_000_000) {
-        request.close();
-        finish(new Error("Tesla owner response exceeded the size limit"));
-      }
-    });
-    request.once("end", () => finish());
-    request.once("error", (error) => finish(error));
-    request.end(input.body);
-  });
+function headerValue(headers: Headers, name: string): string | null {
+  return headers.get(name);
 }
 
-function headerValue(headers: IncomingHttpHeaders, name: string): string | null {
-  const value = headers[name];
-  return Array.isArray(value) ? value[0] ?? null : value?.toString() ?? null;
+async function boundedResponseText(response: Response): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > 5_000_000) {
+      await reader.cancel();
+      throw new Error("Tesla owner response exceeded the size limit");
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -146,19 +111,27 @@ function taskSummaries(raw: unknown): OrderTaskSummary[] {
     .flatMap(([fallbackId, item]): OrderTaskSummary[] => {
       if (!isRecord(item)) return [];
       const id = stringValue(item.id, 100) ?? fallbackId.slice(0, 100);
-      const complete = booleanValue(item.complete);
-      const enabled = booleanValue(item.enabled);
+      const complete =
+        booleanValue(item.complete) ??
+        booleanValue(item.completed) ??
+        booleanValue(item.isComplete);
+      const enabled = booleanValue(item.enabled) ?? booleanValue(item.isEnabled);
       if (complete === null || enabled === null) return [];
       const card = isRecord(item.card) ? item.card : null;
       const strings = isRecord(item.strings) ? item.strings : null;
       const title =
-        stringValue(card?.title, 160) ?? stringValue(strings?.name, 160) ?? id;
+        stringValue(card?.title, 160) ??
+        stringValue(strings?.title, 160) ??
+        stringValue(strings?.name, 160) ??
+        stringValue(strings?.taskTitle, 160) ??
+        stringValue(strings?.taskName, 160) ??
+        id;
       return [{
         id,
         title,
         complete,
         enabled,
-        required: booleanValue(item.required) ?? false,
+        required: booleanValue(item.required) ?? booleanValue(item.isRequired) ?? false,
         order: numberValue(item.order),
       }];
     })
@@ -173,8 +146,11 @@ function financingComplete(raw: unknown): boolean | null {
   const tasks = atPath(raw, ["tasks"]);
   if (!isRecord(tasks)) return null;
   for (const [key, item] of Object.entries(tasks)) {
-    if (!/(financ|payment)/i.test(key) || !isRecord(item)) continue;
-    const complete = booleanValue(item.complete);
+    if (!/(^fin$|financ|payment)/i.test(key) || !isRecord(item)) continue;
+    const complete =
+      booleanValue(item.complete) ??
+      booleanValue(item.completed) ??
+      booleanValue(item.isComplete);
     if (complete !== null) return complete;
   }
   return null;
@@ -185,7 +161,11 @@ export function extractOrderDeliveryDetails(
   raw: unknown,
 ): OrderDeliveryDetails {
   const tasks = taskSummaries(raw);
-  const vin = maskedIdentifier(order.vin, 6);
+  const rawVin =
+    stringValue(order.vin, 1_024) ??
+    stringValue(atPath(raw, ["strings", "vin"]), 1_024) ??
+    stringValue(atPath(raw, ["tasks", "registration", "orderDetails", "vin"]), 1_024);
+  const vin = maskedIdentifier(rawVin, 6);
   const routingLocation =
     stringValue(atPath(raw, ["tasks", "registration", "orderDetails", "vehicleRoutingLocation"])) ??
     stringValue(atPath(raw, ["tasks", "transit", "currentLocation"]));
@@ -201,7 +181,23 @@ export function extractOrderDeliveryDetails(
     vin,
     vinAssigned: vin !== null,
     deliveryWindow: stringValue(atPath(raw, ["tasks", "scheduling", "deliveryWindowDisplay"])),
-    appointment: stringValue(atPath(raw, ["tasks", "scheduling", "apptDateTimeAddressStr"]), 1_024),
+    appointment:
+      stringValue(atPath(raw, ["tasks", "scheduling", "deliveryAppointmentDate"]), 1_024) ??
+      stringValue(atPath(raw, ["tasks", "scheduling", "strings", "apptDateTimeStringRange"]), 1_024) ??
+      stringValue(atPath(raw, ["tasks", "scheduling", "apptDateTimeAddressStr"]), 1_024),
+    appointmentStatus: stringValue(
+      atPath(raw, ["tasks", "scheduling", "appointmentStatusName"]),
+      256,
+    ),
+    appointmentValid: booleanValue(
+      atPath(raw, ["tasks", "scheduling", "isValidAppointment"]),
+    ),
+    rescheduleEligible: booleanValue(
+      atPath(raw, ["tasks", "scheduling", "isEligibleForReschedule"]),
+    ),
+    deliveryEstimatesEnabled: booleanValue(
+      atPath(raw, ["tasks", "scheduling", "isDeliveryEstimatesEnabled"]),
+    ),
     etaToDeliveryCenter: stringValue(atPath(raw, ["tasks", "finalPayment", "data", "etaToDeliveryCenter"])),
     vehicleLocation: routingLocation,
     deliveryMethod:
@@ -249,11 +245,11 @@ export function ownerCodeChallenge(codeVerifier: string): string {
 
 export class OwnerTeslaClient implements OwnerGateway {
   readonly #requestTimeoutMs: number;
-  readonly #fetch: typeof fetch | null;
+  readonly #fetch: typeof fetch;
 
   constructor(requestTimeoutMs: number, fetchImplementation?: typeof fetch) {
     this.#requestTimeoutMs = requestTimeoutMs;
-    this.#fetch = fetchImplementation ?? null;
+    this.#fetch = fetchImplementation ?? fetch;
   }
 
   buildAuthorizationUrl(input: { state: string; codeChallenge: string }): URL {
@@ -346,30 +342,22 @@ export class OwnerTeslaClient implements OwnerGateway {
     },
   ): Promise<OwnerHttpResponse> {
     const requestHeaders: Record<string, string> = {
-      "user-agent": "OrderPulse/0.4.1",
+      "user-agent": "OrderPulse/0.4.2",
       "x-tesla-user-agent": "TeslaApp/4.10.0",
       ...input.headers,
     };
-    if (!this.#fetch) {
-      return http2Request({
-        url,
-        method: input.method,
-        headers: requestHeaders,
-        timeoutMs: this.#requestTimeoutMs,
-        ...(input.body === undefined ? {} : { body: input.body }),
-      });
-    }
     const response = await this.#fetch(url, {
       method: input.method,
       headers: requestHeaders,
       signal: AbortSignal.timeout(this.#requestTimeoutMs),
+      redirect: "error",
       ...(input.body === undefined ? {} : { body: input.body }),
     });
-    const responseHeaders: IncomingHttpHeaders = {};
-    response.headers.forEach((value, name) => {
-      responseHeaders[name] = value;
-    });
-    return { status: response.status, headers: responseHeaders, text: await response.text() };
+    return {
+      status: response.status,
+      headers: response.headers,
+      text: await boundedResponseText(response),
+    };
   }
 
   async #parse(response: OwnerHttpResponse): Promise<unknown> {

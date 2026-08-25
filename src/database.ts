@@ -144,7 +144,13 @@ function parseDeliveryDetails(value: string | null): OrderDeliveryDetails | null
 function deliverySummary(value: string | null): string | null {
   const delivery = parseDeliveryDetails(value);
   if (!delivery) return null;
-  if (delivery.appointment) return `Delivery appointment: ${delivery.appointment}`;
+  if (delivery.appointment) {
+    const status = delivery.appointmentStatus ? ` (${delivery.appointmentStatus})` : "";
+    return `Delivery appointment${status}: ${delivery.appointment}`;
+  }
+  if (delivery.appointmentStatus) {
+    return `Delivery appointment status: ${delivery.appointmentStatus}`;
+  }
   if (delivery.deliveryWindow) return `Delivery window: ${delivery.deliveryWindow}`;
   if (delivery.etaToDeliveryCenter) return `ETA to delivery center: ${delivery.etaToDeliveryCenter}`;
   if (delivery.vinAssigned) return "VIN assigned";

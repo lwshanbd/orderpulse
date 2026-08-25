@@ -86,6 +86,11 @@ class FakeOwner implements OwnerGateway {
           order: 2,
           card: { title: "Schedule delivery" },
           deliveryWindowDisplay: "September 13 - September 30",
+          deliveryAppointmentDate: "2026-09-20T14:00:00-04:00",
+          appointmentStatusName: "SCHEDULED",
+          isValidAppointment: true,
+          isEligibleForReschedule: true,
+          isDeliveryEstimatesEnabled: true,
           deliveryType: "PICKUP_SERVICE_CENTER",
           deliveryAddressTitle: "Smithtown",
         },
@@ -117,6 +122,11 @@ test("Owner PKCE authorization is one-time and enriches orders without exposing 
   const orders = await service.getOrders();
   const delivery = orders[0]?.orderPulseDelivery;
   assert.equal(delivery?.deliveryWindow, "September 13 - September 30");
+  assert.equal(delivery?.appointment, "2026-09-20T14:00:00-04:00");
+  assert.equal(delivery?.appointmentStatus, "SCHEDULED");
+  assert.equal(delivery?.appointmentValid, true);
+  assert.equal(delivery?.rescheduleEligible, true);
+  assert.equal(delivery?.deliveryEstimatesEnabled, true);
   assert.equal(delivery?.deliveryCenter, "Smithtown");
   assert.equal(delivery?.financingComplete, true);
   assert.equal(delivery?.pendingTaskCount, 1);
@@ -140,9 +150,18 @@ test("Owner PKCE authorization is one-time and enriches orders without exposing 
 
 test("delivery extraction keeps only a small task summary allowlist", () => {
   const delivery = extractOrderDeliveryDetails(
-    { referenceNumber: "RN1", vin: "7SAYGDEE9NF123456" },
+    { referenceNumber: "RN1" },
     {
+      strings: { vin: "7SAYGDEE9NF123456" },
       tasks: {
+        fin: {
+          id: "fin",
+          isComplete: true,
+          isEnabled: true,
+          isRequired: true,
+          order: 1,
+          strings: { taskTitle: "Financing" },
+        },
         scheduling: {
           id: "scheduling",
           complete: false,
@@ -155,14 +174,31 @@ test("delivery extraction keeps only a small task summary allowlist", () => {
             messageBody: "private free-form message",
           },
           deliveryWindowDisplay: "September 13 - September 30",
-          apptDateTimeAddressStr: "September 20, 2026 - Smithtown",
+          deliveryAppointmentDate: "2026-09-20T14:00:00-04:00",
+          appointmentStatusName: "SCHEDULED",
+          isValidAppointment: true,
+          isEligibleForReschedule: false,
+          isDeliveryEstimatesEnabled: true,
+          strings: {
+            apptDateTimeStringRange: "September 20, 2:00–3:00 PM",
+            deliveryAppointmentScheduled: "Delivery appointment scheduled",
+          },
         },
       },
     },
   );
   const serialized = JSON.stringify(delivery);
+  assert.equal(delivery.vin, "•••••••••••123456");
+  assert.equal(delivery.appointment, "2026-09-20T14:00:00-04:00");
+  assert.equal(delivery.appointmentStatus, "SCHEDULED");
+  assert.equal(delivery.appointmentValid, true);
+  assert.equal(delivery.rescheduleEligible, false);
+  assert.equal(delivery.deliveryEstimatesEnabled, true);
+  assert.equal(delivery.financingComplete, true);
+  assert.deepEqual(delivery.tasks.map((task) => task.title), ["Financing", "Schedule delivery"]);
   assert.match(serialized, /Schedule delivery|September 13/);
   assert.doesNotMatch(serialized, /private free-form message|private\.example|7SAYGDEE9NF123456/);
+  assert.doesNotMatch(serialized, /Delivery appointment scheduled/);
 });
 
 test("Owner client uses PKCE form exchange and fixed Tesla detail endpoint", async () => {
@@ -197,6 +233,7 @@ test("Owner client uses PKCE form exchange and fixed Tesla detail endpoint", asy
     new Headers(requests[0]?.init?.headers).get("content-type"),
     "application/x-www-form-urlencoded",
   );
+  assert.equal(requests[0]?.init?.redirect, "error");
   const tokenBody = new URLSearchParams(requests[0]?.init?.body?.toString());
   assert.equal(tokenBody.get("client_id"), "ownerapi");
   assert.equal(tokenBody.get("code_verifier"), "verifier");

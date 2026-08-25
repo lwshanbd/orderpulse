@@ -58,6 +58,10 @@ export interface OrderDeliveryDetails {
   vinAssigned: boolean;
   deliveryWindow: string | null;
   appointment: string | null;
+  appointmentStatus: string | null;
+  appointmentValid: boolean | null;
+  rescheduleEligible: boolean | null;
+  deliveryEstimatesEnabled: boolean | null;
   etaToDeliveryCenter: string | null;
   vehicleLocation: string | null;
   deliveryMethod: string | null;
