@@ -1,9 +1,11 @@
 import { createApp } from "./app.js";
+import { ApnsClient } from "./apns.js";
 import { loadConfig } from "./config.js";
-import { SecretBox } from "./crypto.js";
+import { MobileCredentials, SecretBox } from "./crypto.js";
 import { OrderPulseDatabase } from "./database.js";
 import { OrderIdentity } from "./order-identity.js";
 import { OrderMonitor } from "./order-monitor.js";
+import { NotificationDispatcher } from "./notification-dispatcher.js";
 import { TeslaClient } from "./tesla.js";
 import { TeslaTokenService } from "./token-service.js";
 
@@ -11,6 +13,10 @@ const config = loadConfig();
 const database = new OrderPulseDatabase(config.databasePath, new SecretBox(config.tokenEncryptionKey));
 const tesla = new TeslaClient(config);
 const tokenService = new TeslaTokenService(database, tesla);
+const notifications = new NotificationDispatcher(
+  database,
+  config.apnsEnabled ? new ApnsClient(config) : null,
+);
 const orderMonitor = new OrderMonitor({
   database,
   tokenService,
@@ -19,8 +25,17 @@ const orderMonitor = new OrderMonitor({
   intervalSeconds: config.orderPollingIntervalSeconds,
   jitterSeconds: config.orderPollingJitterSeconds,
   missingThreshold: config.orderMissingThreshold,
+  notifications,
 });
-const app = createApp({ config, database, tesla, tokenService, orderMonitor });
+const app = createApp({
+  config,
+  database,
+  tesla,
+  tokenService,
+  orderMonitor,
+  mobileCredentials: new MobileCredentials(config.tokenEncryptionKey),
+  notifications,
+});
 
 let shuttingDown = false;
 

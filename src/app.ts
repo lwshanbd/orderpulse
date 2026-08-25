@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { z } from "zod";
 
 import Fastify, {
   type FastifyInstance,
@@ -7,8 +8,10 @@ import Fastify, {
 } from "fastify";
 
 import type { ServiceConfig } from "./config.js";
-import { randomBase64Url, safeEqual } from "./crypto.js";
+import { MobileCredentials, randomBase64Url, safeEqual } from "./crypto.js";
 import type { OrderPulseDatabase } from "./database.js";
+import type { MobileDevice } from "./mobile-types.js";
+import type { NotificationDispatcher } from "./notification-dispatcher.js";
 import type { OrderMonitor } from "./order-monitor.js";
 import type { OrderEvent, OrderSnapshot, PollRun } from "./order-types.js";
 import { describeShape, sanitizeOrder } from "./redact.js";
@@ -23,6 +26,8 @@ interface AppDependencies {
   tesla: TeslaGateway;
   tokenService: TeslaTokenService;
   orderMonitor: OrderMonitor;
+  mobileCredentials?: MobileCredentials;
+  notifications?: NotificationDispatcher;
 }
 
 interface CallbackQuery {
@@ -41,9 +46,25 @@ interface EventsQuery {
   limit?: string;
 }
 
+declare module "fastify" {
+  interface FastifyRequest {
+    mobileDeviceId?: string;
+  }
+}
+
 const LOGIN_WINDOW_MS = 15 * 60 * 1_000;
 const MAX_LOGIN_FAILURES = 10;
 const MAX_TRACKED_LOGIN_IPS = 1_024;
+const PAIRING_WINDOW_MS = 15 * 60 * 1_000;
+const MAX_PAIRING_FAILURES = 10;
+const pairingRequestSchema = z.object({
+  code: z.string().min(8).max(16),
+  name: z.string().trim().min(1).max(80),
+});
+const pushTokenSchema = z.object({
+  token: z.string().regex(/^[A-Fa-f0-9]{64,400}$/),
+  environment: z.enum(["sandbox", "production"]),
+});
 
 function htmlPage(title: string, message: string): string {
   const escapedTitle = escapeHtml(title);
@@ -153,12 +174,23 @@ function serializePollRun(run: PollRun | null): Record<string, unknown> | null {
   };
 }
 
+function serializeMobileDevice(device: MobileDevice): Record<string, unknown> {
+  return {
+    ...device,
+    createdAt: isoTime(device.createdAt),
+    updatedAt: isoTime(device.updatedAt),
+    revokedAt: isoTime(device.revokedAt),
+  };
+}
+
 export function createApp({
   config,
   database,
   tesla,
   tokenService,
   orderMonitor,
+  mobileCredentials = new MobileCredentials(config.tokenEncryptionKey),
+  notifications,
 }: AppDependencies): FastifyInstance {
   const app = Fastify({
     logger: false,
@@ -167,6 +199,7 @@ export function createApp({
     requestTimeout: config.requestTimeoutMs + 5_000,
   });
   const loginAttempts = new Map<string, LoginAttempt>();
+  const pairingAttempts = new Map<string, LoginAttempt>();
 
   app.addHook("onSend", async (request, reply, payload) => {
     reply.header("X-Content-Type-Options", "nosniff");
@@ -234,6 +267,23 @@ export function createApp({
       return;
     }
     await reply.code(401).send({ error: "unauthorized" });
+  }
+
+  async function requireMobile(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const header = request.headers.authorization;
+    if (!header?.startsWith("Bearer ")) {
+      await reply.code(401).send({ error: "unauthorized" });
+      return;
+    }
+    const token = header.slice(7);
+    const deviceId = token.length >= 32
+      ? database.authenticateMobileDevice(mobileCredentials.hash(token))
+      : null;
+    if (!deviceId) {
+      await reply.code(401).send({ error: "unauthorized" });
+      return;
+    }
+    request.mobileDeviceId = deviceId;
   }
 
   app.get("/healthz", async () => ({ status: "ok" }));
@@ -377,6 +427,125 @@ export function createApp({
       nextPollAt: isoTime(status.nextPollAt),
       latestRun: serializePollRun(status.latestRun),
     };
+  });
+
+  app.post("/api/devices/pairing-code", { preHandler: requireAdmin }, async () => {
+    const code = mobileCredentials.createPairingCode();
+    const normalizedCode = mobileCredentials.normalizePairingCode(code);
+    const expiresAt = Date.now() + config.mobilePairingTtlSeconds * 1_000;
+    database.createMobilePairingCode(mobileCredentials.hash(normalizedCode), expiresAt);
+    return { code, expiresAt: new Date(expiresAt).toISOString() };
+  });
+
+  app.get("/api/devices", { preHandler: requireAdmin }, async () => {
+    const devices = database.listMobileDevices().map(serializeMobileDevice);
+    return { count: devices.length, apnsEnabled: notifications?.enabled ?? false, devices };
+  });
+
+  app.delete<{ Params: { id: string } }>(
+    "/api/devices/:id",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const revoked = database.revokeMobileDevice(request.params.id);
+      return revoked ? reply.code(204).send() : reply.code(404).send({ error: "not_found" });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/devices/:id/test-notification",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      if (!notifications?.enabled) {
+        return reply.code(503).send({ error: "apns_not_configured" });
+      }
+      const result = await notifications.sendTest(request.params.id);
+      if (!result) return reply.code(404).send({ error: "push_target_not_found" });
+      return result.accepted
+        ? { accepted: true }
+        : reply.code(502).send({ accepted: false, error: result.errorCode });
+    },
+  );
+
+  app.post("/api/mobile/pair", async (request, reply) => {
+    const now = Date.now();
+    const previous = pairingAttempts.get(request.ip);
+    if (previous && previous.resetAt > now && previous.failures >= MAX_PAIRING_FAILURES) {
+      reply.header("Retry-After", Math.ceil((previous.resetAt - now) / 1_000));
+      return reply.code(429).send({ error: "too_many_pairing_attempts" });
+    }
+    const parsed = pairingRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request" });
+    }
+    const normalizedCode = mobileCredentials.normalizePairingCode(parsed.data.code);
+    const accessToken = mobileCredentials.createAccessToken();
+    const deviceId = randomBase64Url(16);
+    const paired = normalizedCode.length === 8 && database.pairMobileDevice({
+      codeHash: mobileCredentials.hash(normalizedCode),
+      deviceId,
+      credentialHash: mobileCredentials.hash(accessToken),
+      name: parsed.data.name,
+      now,
+    });
+    if (!paired) {
+      const current = previous && previous.resetAt > now
+        ? previous
+        : { failures: 0, resetAt: now + PAIRING_WINDOW_MS };
+      current.failures += 1;
+      pairingAttempts.set(request.ip, current);
+      if (current.failures >= MAX_PAIRING_FAILURES) {
+        reply.header("Retry-After", Math.ceil((current.resetAt - now) / 1_000));
+        return reply.code(429).send({ error: "too_many_pairing_attempts" });
+      }
+      return reply.code(401).send({ error: "invalid_or_expired_pairing_code" });
+    }
+    pairingAttempts.delete(request.ip);
+    return { deviceId, accessToken };
+  });
+
+  app.get("/api/mobile/bootstrap", { preHandler: requireMobile }, async () => {
+    const monitorStatus = orderMonitor.status();
+    return {
+      serverTime: new Date().toISOString(),
+      apnsEnabled: notifications?.enabled ?? false,
+      orders: database.listOrderSnapshots().map(serializeSnapshot),
+      events: database.listOrderEvents(50).map(serializeEvent),
+      polling: {
+        enabled: monitorStatus.enabled,
+        inProgress: monitorStatus.inProgress,
+        nextPollAt: isoTime(monitorStatus.nextPollAt),
+        latestRun: serializePollRun(monitorStatus.latestRun),
+      },
+    };
+  });
+
+  app.put("/api/mobile/device-token", { preHandler: requireMobile }, async (request, reply) => {
+    const parsed = pushTokenSchema.safeParse(request.body);
+    if (!parsed.success || !request.mobileDeviceId) {
+      return reply.code(400).send({ error: "invalid_request" });
+    }
+    if (config.apnsEnabled && parsed.data.environment !== config.apnsEnvironment) {
+      return reply.code(409).send({
+        error: "apns_environment_mismatch",
+        expectedEnvironment: config.apnsEnvironment,
+      });
+    }
+    const registered = database.registerMobilePushToken(
+      request.mobileDeviceId,
+      parsed.data.token.toLowerCase(),
+      parsed.data.environment,
+    );
+    return registered ? reply.code(204).send() : reply.code(404).send({ error: "not_found" });
+  });
+
+  app.delete("/api/mobile/device-token", { preHandler: requireMobile }, async (request, reply) => {
+    if (request.mobileDeviceId) database.removeMobilePushToken(request.mobileDeviceId);
+    return reply.code(204).send();
+  });
+
+  app.delete("/api/mobile/device", { preHandler: requireMobile }, async (request, reply) => {
+    if (request.mobileDeviceId) database.revokeMobileDevice(request.mobileDeviceId);
+    return reply.code(204).send();
   });
 
   app.post("/api/polling/run", { preHandler: requireAdmin }, async (_request, reply) => {

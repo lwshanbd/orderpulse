@@ -11,6 +11,11 @@ import type {
   PollSource,
   TrackedOrder,
 } from "./order-types.js";
+import type {
+  ApnsEnvironment,
+  MobileDevice,
+  NotificationJob,
+} from "./mobile-types.js";
 import type { OAuthTransaction, StoredTeslaTokens, TeslaTokenResponse } from "./types.js";
 import { SecretBox } from "./crypto.js";
 
@@ -70,6 +75,29 @@ interface PollRunRow {
   error_code: string | null;
 }
 
+interface PairingCodeRow {
+  code_hash: string;
+  expires_at: number;
+  used_at: number | null;
+}
+
+interface MobileDeviceRow {
+  id: string;
+  name: string;
+  apns_token_ciphertext: string | null;
+  apns_environment: ApnsEnvironment | null;
+  created_at: number;
+  updated_at: number;
+  revoked_at: number | null;
+}
+
+interface NotificationJobRow extends EventRow {
+  device_id: string;
+  apns_token_ciphertext: string;
+  apns_environment: ApnsEnvironment;
+  attempt_count: number;
+}
+
 function parseMarketOptions(value: string): string[] {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -127,6 +155,18 @@ function pollRunFromRow(row: PollRunRow): PollRun {
     orderCount: row.order_count,
     eventCount: row.event_count,
     errorCode: row.error_code,
+  };
+}
+
+function mobileDeviceFromRow(row: MobileDeviceRow): MobileDevice {
+  return {
+    id: row.id,
+    name: row.name,
+    pushEnabled: row.apns_token_ciphertext !== null,
+    apnsEnvironment: row.apns_environment,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    revokedAt: row.revoked_at,
   };
 }
 
@@ -218,6 +258,43 @@ export class OrderPulseDatabase {
 
       CREATE INDEX IF NOT EXISTS poll_runs_started_at_idx
         ON poll_runs(started_at DESC);
+
+      CREATE TABLE IF NOT EXISTS mobile_pairing_codes (
+        code_hash TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        used_at INTEGER
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS mobile_pairing_codes_expires_at_idx
+        ON mobile_pairing_codes(expires_at);
+
+      CREATE TABLE IF NOT EXISTS mobile_devices (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        credential_hash TEXT NOT NULL UNIQUE,
+        apns_token_ciphertext TEXT,
+        apns_environment TEXT CHECK (apns_environment IN ('sandbox', 'production')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        revoked_at INTEGER
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS notification_deliveries (
+        event_id INTEGER NOT NULL,
+        device_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('sent', 'failed')),
+        attempt_count INTEGER NOT NULL CHECK (attempt_count > 0),
+        last_error TEXT,
+        next_attempt_at INTEGER,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (event_id, device_id),
+        FOREIGN KEY (event_id) REFERENCES order_events(id) ON DELETE CASCADE,
+        FOREIGN KEY (device_id) REFERENCES mobile_devices(id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS notification_deliveries_retry_idx
+        ON notification_deliveries(status, next_attempt_at);
     `);
   }
 
@@ -625,6 +702,246 @@ export class OrderPulseDatabase {
       )
       .get() as unknown as PollRunRow | undefined;
     return row ? pollRunFromRow(row) : null;
+  }
+
+  createMobilePairingCode(codeHash: string, expiresAt: number, now = Date.now()): void {
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#database
+        .prepare("DELETE FROM mobile_pairing_codes WHERE expires_at <= ? OR used_at IS NOT NULL")
+        .run(now);
+      this.#database
+        .prepare(
+          `INSERT INTO mobile_pairing_codes (code_hash, created_at, expires_at)
+           VALUES (?, ?, ?)`,
+        )
+        .run(codeHash, now, expiresAt);
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  pairMobileDevice(input: {
+    codeHash: string;
+    deviceId: string;
+    credentialHash: string;
+    name: string;
+    now?: number;
+  }): boolean {
+    const now = input.now ?? Date.now();
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const code = this.#database
+        .prepare(
+          `SELECT code_hash, expires_at, used_at
+           FROM mobile_pairing_codes WHERE code_hash = ?`,
+        )
+        .get(input.codeHash) as unknown as PairingCodeRow | undefined;
+      if (!code || code.used_at !== null || code.expires_at <= now) {
+        this.#database.exec("ROLLBACK");
+        return false;
+      }
+
+      this.#database
+        .prepare("UPDATE mobile_pairing_codes SET used_at = ? WHERE code_hash = ?")
+        .run(now, input.codeHash);
+      this.#database
+        .prepare(
+          `INSERT INTO mobile_devices (
+            id, name, credential_hash, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(input.deviceId, input.name, input.credentialHash, now, now);
+      this.#database.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  authenticateMobileDevice(credentialHash: string): string | null {
+    const row = this.#database
+      .prepare(
+        `SELECT id FROM mobile_devices
+         WHERE credential_hash = ? AND revoked_at IS NULL`,
+      )
+      .get(credentialHash) as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
+  registerMobilePushToken(
+    deviceId: string,
+    deviceToken: string,
+    environment: ApnsEnvironment,
+    now = Date.now(),
+  ): boolean {
+    const result = this.#database
+      .prepare(
+        `UPDATE mobile_devices SET
+          apns_token_ciphertext = ?, apns_environment = ?, updated_at = ?
+         WHERE id = ? AND revoked_at IS NULL`,
+      )
+      .run(this.#secrets.encrypt(deviceToken), environment, now, deviceId);
+    return result.changes === 1;
+  }
+
+  removeMobilePushToken(deviceId: string, now = Date.now()): void {
+    this.#database
+      .prepare(
+        `UPDATE mobile_devices SET
+          apns_token_ciphertext = NULL, apns_environment = NULL, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(now, deviceId);
+  }
+
+  listMobileDevices(): MobileDevice[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT id, name, apns_token_ciphertext, apns_environment,
+                created_at, updated_at, revoked_at
+         FROM mobile_devices ORDER BY created_at DESC`,
+      )
+      .all() as unknown as MobileDeviceRow[];
+    return rows.map(mobileDeviceFromRow);
+  }
+
+  revokeMobileDevice(deviceId: string, now = Date.now()): boolean {
+    const result = this.#database
+      .prepare(
+        `UPDATE mobile_devices SET
+          revoked_at = ?, updated_at = ?, apns_token_ciphertext = NULL,
+          apns_environment = NULL
+         WHERE id = ? AND revoked_at IS NULL`,
+      )
+      .run(now, now, deviceId);
+    return result.changes === 1;
+  }
+
+  mobileDeviceNotificationTarget(deviceId: string): NotificationJob | null {
+    const row = this.#database
+      .prepare(
+        `SELECT 0 AS id, '' AS order_key, NULL AS reference_suffix,
+                'baseline_created' AS event_type, NULL AS previous_status,
+                NULL AS previous_substatus, NULL AS current_status,
+                NULL AS current_substatus, 0 AS notification_eligible,
+                NULL AS notification_delivered_at, ? AS created_at,
+                id AS device_id, apns_token_ciphertext, apns_environment,
+                0 AS attempt_count
+         FROM mobile_devices
+         WHERE id = ? AND revoked_at IS NULL
+           AND apns_token_ciphertext IS NOT NULL AND apns_environment IS NOT NULL`,
+      )
+      .get(Date.now(), deviceId) as unknown as NotificationJobRow | undefined;
+    return row ? this.#notificationJobFromRow(row) : null;
+  }
+
+  listPendingNotificationJobs(limit = 50, now = Date.now()): NotificationJob[] {
+    const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 200);
+    const rows = this.#database
+      .prepare(
+        `SELECT e.id, e.order_key, s.reference_suffix, e.event_type,
+                e.previous_status, e.previous_substatus,
+                e.current_status, e.current_substatus,
+                e.notification_eligible, e.notification_delivered_at, e.created_at,
+                d.id AS device_id, d.apns_token_ciphertext, d.apns_environment,
+                COALESCE(nd.attempt_count, 0) AS attempt_count
+         FROM order_events e
+         JOIN order_snapshots s ON s.order_key = e.order_key
+         CROSS JOIN mobile_devices d
+         LEFT JOIN notification_deliveries nd
+           ON nd.event_id = e.id AND nd.device_id = d.id
+         WHERE e.notification_eligible = 1
+           AND e.created_at >= d.created_at
+           AND d.revoked_at IS NULL
+           AND d.apns_token_ciphertext IS NOT NULL
+           AND d.apns_environment IS NOT NULL
+           AND (
+             nd.event_id IS NULL OR
+             (nd.status = 'failed' AND nd.attempt_count < 5 AND nd.next_attempt_at <= ?)
+           )
+         ORDER BY e.created_at ASC, e.id ASC
+         LIMIT ?`,
+      )
+      .all(now, safeLimit) as unknown as NotificationJobRow[];
+    return rows.map((row) => this.#notificationJobFromRow(row));
+  }
+
+  #notificationJobFromRow(row: NotificationJobRow): NotificationJob {
+    return {
+      event: eventFromRow(row),
+      deviceId: row.device_id,
+      deviceToken: this.#secrets.decrypt(row.apns_token_ciphertext),
+      environment: row.apns_environment,
+      attemptCount: row.attempt_count,
+    };
+  }
+
+  recordNotificationDelivery(input: {
+    eventId: number;
+    deviceId: string;
+    accepted: boolean;
+    errorCode: string | null;
+    permanentFailure: boolean;
+    now?: number;
+  }): void {
+    const now = input.now ?? Date.now();
+    const existing = this.#database
+      .prepare(
+        `SELECT attempt_count FROM notification_deliveries
+         WHERE event_id = ? AND device_id = ?`,
+      )
+      .get(input.eventId, input.deviceId) as { attempt_count: number } | undefined;
+    const attemptCount = (existing?.attempt_count ?? 0) + 1;
+    const retryDelay = Math.min(5 * 60_000 * 2 ** (attemptCount - 1), 6 * 60 * 60_000);
+    const nextAttemptAt = input.accepted || input.permanentFailure ? null : now + retryDelay;
+    const status = input.accepted ? "sent" : "failed";
+    const errorCode = input.errorCode?.slice(0, 100) ?? null;
+
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      this.#database
+        .prepare(
+          `INSERT INTO notification_deliveries (
+            event_id, device_id, status, attempt_count,
+            last_error, next_attempt_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(event_id, device_id) DO UPDATE SET
+            status = excluded.status,
+            attempt_count = excluded.attempt_count,
+            last_error = excluded.last_error,
+            next_attempt_at = excluded.next_attempt_at,
+            updated_at = excluded.updated_at`,
+        )
+        .run(
+          input.eventId,
+          input.deviceId,
+          status,
+          attemptCount,
+          errorCode,
+          nextAttemptAt,
+          now,
+        );
+      if (input.accepted) {
+        this.#database
+          .prepare(
+            `UPDATE order_events
+             SET notification_delivered_at = COALESCE(notification_delivered_at, ?)
+             WHERE id = ?`,
+          )
+          .run(now, input.eventId);
+      }
+      if (input.permanentFailure) {
+        this.removeMobilePushToken(input.deviceId, now);
+      }
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   close(): void {

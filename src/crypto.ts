@@ -1,6 +1,8 @@
 import {
   createCipheriv,
   createDecipheriv,
+  createHmac,
+  hkdfSync,
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
@@ -59,4 +61,42 @@ export function safeEqual(left: string, right: string): boolean {
   const rightBuffer = Buffer.from(right, "utf8");
   if (leftBuffer.length !== rightBuffer.length) return false;
   return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+export class MobileCredentials {
+  readonly #hmacKey: Buffer;
+
+  constructor(masterKey: Buffer) {
+    if (masterKey.length !== 32) {
+      throw new Error("MobileCredentials requires a 32-byte master key");
+    }
+    this.#hmacKey = Buffer.from(
+      hkdfSync(
+        "sha256",
+        masterKey,
+        Buffer.from("OrderPulse mobile credentials salt", "utf8"),
+        Buffer.from("mobile-credential-hmac-v1", "utf8"),
+        32,
+      ),
+    );
+  }
+
+  createPairingCode(): string {
+    const alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+    const bytes = randomBytes(8);
+    const characters = [...bytes].map((value) => alphabet[value % alphabet.length]);
+    return `${characters.slice(0, 4).join("")}-${characters.slice(4).join("")}`;
+  }
+
+  normalizePairingCode(value: string): string {
+    return value.toUpperCase().replace(/[^2-9A-HJ-NP-Z]/g, "");
+  }
+
+  createAccessToken(): string {
+    return randomBase64Url(32);
+  }
+
+  hash(value: string): string {
+    return createHmac("sha256", this.#hmacKey).update(value, "utf8").digest("base64url");
+  }
 }

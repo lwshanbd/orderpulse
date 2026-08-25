@@ -33,6 +33,9 @@ test("configuration limits OAuth scopes to order-read requirements", () => {
   assert.equal(config.orderPollingEnabled, false);
   assert.equal(config.orderPollingIntervalSeconds, 1_800);
   assert.equal(config.orderMissingThreshold, 3);
+  assert.equal(config.mobilePairingTtlSeconds, 600);
+  assert.equal(config.apnsEnabled, false);
+  assert.equal(config.apnsTopic, "com.baodishan.orderpulse");
 });
 
 test("polling configuration is explicit and validated", () => {
@@ -57,6 +60,13 @@ test("production requires secrets to come from files", () => {
   assert.throws(
     () => loadConfig({ ...developmentEnvironment(), NODE_ENV: "production" }),
     /ADMIN_PASSWORD must be supplied through ADMIN_PASSWORD_FILE/,
+  );
+});
+
+test("APNs stays optional but requires credentials when enabled", () => {
+  assert.throws(
+    () => loadConfig({ ...developmentEnvironment(), APNS_ENABLED: "true" }),
+    /APNS_KEY_ID/,
   );
 });
 

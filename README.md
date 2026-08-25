@@ -1,6 +1,6 @@
 # OrderPulse Service
 
-这是运行在 NAS 上的 OrderPulse 后台：完成 Tesla 用户 OAuth、加密保存和自动刷新 token、读取订单、建立隐私安全的状态快照，并记录可供后续 APNs 使用的变化事件。APNs 与 iOS 客户端仍属于下一阶段。
+这是运行在 NAS 上的 OrderPulse 后台和配套 iOS App：完成 Tesla 用户 OAuth、加密保存和自动刷新 token、读取订单、建立隐私安全的状态快照，并把状态变化通过 APNs 发到已配对的 iPhone。
 
 ## 已实现
 
@@ -16,8 +16,18 @@
 - `GET /api/polling/status`：返回调度配置、下次运行时间和最近一次结果。
 - `POST /api/polling/run`：手动执行一次查询与变化检测。
 - `DELETE /api/authorization`：删除 NAS 上保存的 Tesla 授权。
+- `POST /api/devices/pairing-code`：管理员生成 10 分钟有效、只能使用一次的 iPhone 配对码。
+- `GET /api/devices`：管理员查看已配对设备和推送状态，不返回设备凭证或 APNs token。
+- `DELETE /api/devices/:id`：管理员撤销一台设备。
+- `POST /api/devices/:id/test-notification`：管理员向一台已注册设备发送 APNs 测试提醒。
+- `POST /api/mobile/pair`：iOS App 用一次性配对码换取独立设备凭证。
+- `GET /api/mobile/bootstrap`：iOS App 读取快照、事件和轮询状态，不调用 Tesla。
+- `PUT /api/mobile/device-token`：已配对设备上传最新 APNs token。
+- `DELETE /api/mobile/device`：iOS App 撤销自己的设备凭证。
 
-除健康检查、公钥和 Tesla 回调外，所有接口都受 HTTPS Basic Auth 保护。
+管理接口受 HTTPS Basic Auth 保护；移动端接口使用每台设备独立的 Bearer 凭证。App 不保存管理员密码、Tesla access token 或 refresh token。设备凭证只保存在 iOS Keychain；NAS 只保存它的 HMAC，APNs device token 使用 AES-256-GCM 加密保存。
+
+Tesla 当前订单字段与预计交付日期的边界见 [`docs/order-fields.md`](docs/order-fields.md)。
 
 ## Tesla Developer Portal
 
@@ -73,7 +83,8 @@ orderpulse/
     ├── admin_password.txt
     ├── token_encryption_key.txt
     ├── tesla_client_id.txt
-    └── tesla_client_secret.txt
+    ├── tesla_client_secret.txt
+    └── apns_private_key.p8        # 启用推送时才需要
 ```
 
 把 NAS 当前已经通过公网验证的同一份 Tesla 公钥放入上述 `public` 路径。不要生成新的公钥，否则会和已注册指纹不一致。
@@ -99,6 +110,43 @@ docker compose ps
 ```
 
 `secrets` 目录本身为 mode 700，因此其他 NAS 用户无法遍历；文件使用 mode 644 是为了让容器内的非 root 用户能够读取 Docker Compose 的只读 secret bind mount。若 NAS 上该目录不属于当前管理员，请用 DSM ACL 达到同样效果。`data` 需要由镜像内 UID 1000 的非 root 用户写入。如果你的 NAS 已占用 UID 1000 或不允许这样设置，改用 DSM ACL 给该 UID 对 `data` 的读写权限，不要把容器改为 root，也不要把 secret 改成环境变量。
+
+## iPhone 配对
+
+部署后用管理员 Basic Auth 生成一次性配对码：
+
+```sh
+curl -u orderpulse -X POST https://orderpulse.baodishan.com/api/devices/pairing-code
+```
+
+在 OrderPulse App 输入返回的 `code`。配对码 10 分钟后失效且只能用一次。App 下拉刷新只读取 NAS 已有快照，不会额外请求 Tesla；Tesla 的调用频率仍完全由 NAS 轮询器控制。
+
+## Apple Push Notifications
+
+在 Apple Developer 后台为 App ID `com.baodishan.orderpulse` 启用 Push Notifications，再创建一枚 APNs signing key 并只下载一次 `.p8` 私钥。把文件保存为 NAS 的 `secrets/apns_private_key.p8`，不要提交 Git。
+
+开发阶段在部署目录的 `.env` 使用：
+
+```text
+APNS_ENABLED=true
+APNS_ENVIRONMENT=sandbox
+APNS_KEY_ID=你的_Key_ID
+APNS_TEAM_ID=你的_Team_ID
+APNS_TOPIC=com.baodishan.orderpulse
+```
+
+TestFlight/App Store 构建应把 NAS 改为 `APNS_ENVIRONMENT=production` 后重启服务。新式 environment-specific APNs key 也必须选择对应环境。Provider JWT 每 50 分钟更新；无效或已注销的 device token 会停止重试，临时错误最多重试五次并指数退避。
+
+## iOS 工程
+
+工程位于 `ios/OrderPulse.xcodeproj`，最低支持 iOS 17，Bundle ID 为 `com.baodishan.orderpulse`。首次真机运行前在 Xcode 的 Signing & Capabilities 选择你的 Apple Developer Team，并确认 Push Notifications capability 生效。
+
+如需重新生成工程：
+
+```sh
+cd ios
+xcodegen generate --spec project.yml
+```
 
 ## 启用定时轮询
 

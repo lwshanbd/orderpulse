@@ -26,6 +26,13 @@ services:
       ORDER_POLL_INTERVAL_SECONDS: "${ORDER_POLL_INTERVAL_SECONDS:-1800}"
       ORDER_POLL_JITTER_SECONDS: "${ORDER_POLL_JITTER_SECONDS:-60}"
       ORDER_MISSING_THRESHOLD: "${ORDER_MISSING_THRESHOLD:-3}"
+      MOBILE_PAIRING_TTL_SECONDS: "${MOBILE_PAIRING_TTL_SECONDS:-600}"
+      APNS_ENABLED: "${APNS_ENABLED:-false}"
+      APNS_ENVIRONMENT: "${APNS_ENVIRONMENT:-sandbox}"
+      APNS_KEY_ID: "${APNS_KEY_ID:-}"
+      APNS_TEAM_ID: "${APNS_TEAM_ID:-}"
+      APNS_TOPIC: "${APNS_TOPIC:-com.baodishan.orderpulse}"
+      APNS_PRIVATE_KEY_FILE: /run/orderpulse-secrets/apns_private_key.p8
     secrets:
       - admin_password
       - token_encryption_key
@@ -34,6 +41,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./public:/app/public:ro
+      - ./secrets:/run/orderpulse-secrets:ro
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid,nodev

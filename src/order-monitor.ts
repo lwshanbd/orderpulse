@@ -39,7 +39,12 @@ interface OrderMonitorOptions {
   intervalSeconds: number;
   jitterSeconds: number;
   missingThreshold: number;
+  notifications?: NotificationDispatching;
   random?: () => number;
+}
+
+export interface NotificationDispatching {
+  deliverPending(): Promise<number>;
 }
 
 export interface OrderProvider {
@@ -68,6 +73,7 @@ export class OrderMonitor {
   readonly #intervalMs: number;
   readonly #jitterMs: number;
   readonly #missingThreshold: number;
+  readonly #notifications: NotificationDispatching | null;
   readonly #random: () => number;
   #started = false;
   #timer: NodeJS.Timeout | null = null;
@@ -84,6 +90,7 @@ export class OrderMonitor {
     this.#intervalMs = options.intervalSeconds * 1_000;
     this.#jitterMs = options.jitterSeconds * 1_000;
     this.#missingThreshold = options.missingThreshold;
+    this.#notifications = options.notifications ?? null;
     this.#random = options.random ?? Math.random;
   }
 
@@ -174,6 +181,13 @@ export class OrderMonitor {
         eventCount: reconciliation.eventCount,
         finishedAt,
       });
+      if (this.#notifications) {
+        try {
+          await this.#notifications.deliverPending();
+        } catch {
+          // APNs failures are tracked independently and must not invalidate a Tesla poll.
+        }
+      }
       return { pollRunId, orders, reconciliation, startedAt, finishedAt };
     } catch (error) {
       this.#database.failPollRun(pollRunId, safePollErrorCode(error));

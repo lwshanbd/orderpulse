@@ -102,6 +102,13 @@ function testConfig(directory: string, publicKeyFile: string): ServiceConfig {
     orderPollingIntervalSeconds: 1_800,
     orderPollingJitterSeconds: 60,
     orderMissingThreshold: 3,
+    mobilePairingTtlSeconds: 600,
+    apnsEnabled: false,
+    apnsEnvironment: "sandbox",
+    apnsKeyId: null,
+    apnsTeamId: null,
+    apnsTopic: "com.baodishan.orderpulse",
+    apnsPrivateKey: null,
   };
 }
 
@@ -231,6 +238,73 @@ test("service protects admin routes and completes a one-time OAuth callback", as
   assert.equal(schema.statusCode, 200);
   assert.match(schema.body, /delivery\.street/);
   assert.doesNotMatch(schema.body, /123 Private Road/);
+
+  const pairingCodeResponse = await app.inject({
+    method: "POST",
+    url: "/api/devices/pairing-code",
+    headers: { authorization },
+  });
+  assert.equal(pairingCodeResponse.statusCode, 200);
+  const pairingCode = pairingCodeResponse.json().code as string;
+  assert.match(pairingCode, /^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/);
+
+  const paired = await app.inject({
+    method: "POST",
+    url: "/api/mobile/pair",
+    payload: { code: pairingCode.toLowerCase(), name: "Test iPhone" },
+  });
+  assert.equal(paired.statusCode, 200);
+  const mobileAccessToken = paired.json().accessToken as string;
+  const mobileDeviceId = paired.json().deviceId as string;
+  assert.ok(mobileAccessToken.length >= 32);
+
+  const replayedPairingCode = await app.inject({
+    method: "POST",
+    url: "/api/mobile/pair",
+    payload: { code: pairingCode, name: "Second iPhone" },
+  });
+  assert.equal(replayedPairingCode.statusCode, 401);
+
+  const mobileAuthorization = `Bearer ${mobileAccessToken}`;
+  const bootstrap = await app.inject({
+    method: "GET",
+    url: "/api/mobile/bootstrap",
+    headers: { authorization: mobileAuthorization },
+  });
+  assert.equal(bootstrap.statusCode, 200);
+  assert.match(bootstrap.body, /AWAITING_VIN/);
+  assert.doesNotMatch(bootstrap.body, /RN123456789|5YJ12345678901234|123 Private Road/);
+
+  const pushToken = "ab".repeat(32);
+  const registeredPush = await app.inject({
+    method: "PUT",
+    url: "/api/mobile/device-token",
+    headers: { authorization: mobileAuthorization },
+    payload: { token: pushToken, environment: "sandbox" },
+  });
+  assert.equal(registeredPush.statusCode, 204);
+
+  const devices = await app.inject({
+    method: "GET",
+    url: "/api/devices",
+    headers: { authorization },
+  });
+  assert.equal(devices.statusCode, 200);
+  assert.equal(devices.json().devices[0].pushEnabled, true);
+  assert.doesNotMatch(devices.body, new RegExp(pushToken));
+
+  const revoked = await app.inject({
+    method: "DELETE",
+    url: `/api/devices/${mobileDeviceId}`,
+    headers: { authorization },
+  });
+  assert.equal(revoked.statusCode, 204);
+  const revokedBootstrap = await app.inject({
+    method: "GET",
+    url: "/api/mobile/bootstrap",
+    headers: { authorization: mobileAuthorization },
+  });
+  assert.equal(revokedBootstrap.statusCode, 401);
 
   const publicKey = await app.inject({
     method: "GET",

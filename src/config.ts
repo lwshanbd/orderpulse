@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 
+import type { ApnsEnvironment } from "./mobile-types.js";
+
 const environmentSchema = z.enum(["development", "test", "production"]);
 
 export interface ServiceConfig {
@@ -31,6 +33,13 @@ export interface ServiceConfig {
   orderPollingIntervalSeconds: number;
   orderPollingJitterSeconds: number;
   orderMissingThreshold: number;
+  mobilePairingTtlSeconds: number;
+  apnsEnabled: boolean;
+  apnsEnvironment: ApnsEnvironment;
+  apnsKeyId: string | null;
+  apnsTeamId: string | null;
+  apnsTopic: string;
+  apnsPrivateKey: string | null;
 }
 
 function readConfiguredValue(
@@ -120,6 +129,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
   if (orderMissingThreshold > 100) {
     throw new Error("ORDER_MISSING_THRESHOLD must not exceed 100");
   }
+  const mobilePairingTtlSeconds = parsePositiveInteger(
+    env.MOBILE_PAIRING_TTL_SECONDS,
+    600,
+    "MOBILE_PAIRING_TTL_SECONDS",
+  );
+  if (mobilePairingTtlSeconds > 3_600) {
+    throw new Error("MOBILE_PAIRING_TTL_SECONDS must not exceed 3600");
+  }
+
+  const apnsEnabled = parseBoolean(env.APNS_ENABLED, false);
+  const apnsEnvironment = z
+    .enum(["sandbox", "production"])
+    .parse(env.APNS_ENVIRONMENT ?? "sandbox");
+  const apnsTopic = env.APNS_TOPIC?.trim() || "com.baodishan.orderpulse";
+  if (!/^[A-Za-z0-9.-]+$/.test(apnsTopic)) {
+    throw new Error("APNS_TOPIC must be a valid bundle identifier");
+  }
+  const apnsKeyId = apnsEnabled
+    ? readConfiguredValue(env, "APNS_KEY_ID", { production })
+    : null;
+  const apnsTeamId = apnsEnabled
+    ? readConfiguredValue(env, "APNS_TEAM_ID", { production })
+    : null;
+  const apnsPrivateKey = apnsEnabled
+    ? readConfiguredValue(env, "APNS_PRIVATE_KEY", { secret: true, production })
+    : null;
 
   const publicUrl = new URL(env.PUBLIC_BASE_URL ?? "https://orderpulse.baodishan.com");
   if (publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash) {
@@ -209,5 +244,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig 
     orderPollingIntervalSeconds,
     orderPollingJitterSeconds,
     orderMissingThreshold,
+    mobilePairingTtlSeconds,
+    apnsEnabled,
+    apnsEnvironment,
+    apnsKeyId,
+    apnsTeamId,
+    apnsTopic,
+    apnsPrivateKey,
   };
 }

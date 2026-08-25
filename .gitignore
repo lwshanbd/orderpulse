@@ -14,3 +14,8 @@ secrets/
 *.p8
 private-key.pem
 public/.well-known/appspecific/com.tesla.3p.public-key.pem
+.artifacts/
+*.xcresult
+**/xcuserdata/
+**/.DS_Store
+ios/.claude/
