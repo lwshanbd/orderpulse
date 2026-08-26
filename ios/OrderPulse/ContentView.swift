@@ -3,6 +3,7 @@ import UIKit
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -20,6 +21,10 @@ struct ContentView: View {
             Button("知道了", role: .cancel) { model.errorMessage = nil }
         } message: {
             Text(model.errorMessage ?? "")
+        }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            await model.refresh()
         }
     }
 }
@@ -130,7 +135,6 @@ private struct DashboardView: View {
                 }
             }
             .sheet(isPresented: $showingSettings) { SettingsView() }
-            .task { if model.bootstrap == nil { await model.refresh() } }
         }
     }
 

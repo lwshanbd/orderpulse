@@ -36,7 +36,6 @@ final class AppModel: ObservableObject {
 
         if isPaired {
             Task {
-                await refresh()
                 await enableNotifications()
             }
         }
