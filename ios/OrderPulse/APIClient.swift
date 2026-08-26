@@ -163,6 +163,9 @@ enum APIError: LocalizedError {
             if code == "too_many_pairing_attempts" { return "尝试次数过多，请稍后再试。" }
             if code == "owner_already_authorized" { return "Tesla 订单详情已经连接。" }
             if code == "owner_authorization_failed" { return "Tesla 登录回调无效或已经过期，请重新开始。" }
+            if code == "tesla_api_error" {
+                return "Tesla 暂时拒绝了此次实时检查。已保存的数据不会丢失，请稍后再试。"
+            }
             return message ?? "后台请求失败（\(status)）。"
         }
     }

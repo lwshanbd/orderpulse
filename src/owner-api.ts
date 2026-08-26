@@ -13,7 +13,6 @@ const OWNER_CLIENT_ID = "ownerapi";
 const OWNER_REDIRECT_URI = "tesla://auth/callback";
 const OWNER_AUTHORIZATION_URL = "https://auth.tesla.com/oauth2/v3/authorize";
 const OWNER_TOKEN_URL = "https://auth.tesla.com/oauth2/v3/token";
-const OWNER_ORDERS_URL = "https://owner-api.teslamotors.com/api/1/users/orders";
 const OWNER_DETAILS_URL = "https://akamai-apigateway-vfx.tesla.com/tasks";
 
 interface OwnerHttpResponse {
@@ -310,14 +309,6 @@ export class OwnerTeslaClient implements OwnerGateway {
     }));
   }
 
-  async getOrders(accessToken: string): Promise<TeslaOrder[]> {
-    const raw = await this.#get(new URL(OWNER_ORDERS_URL), accessToken);
-    if (!isRecord(raw) || !Array.isArray(raw.response)) {
-      throw new Error("Tesla returned an invalid owner orders response");
-    }
-    return raw.response.filter(isRecord) as TeslaOrder[];
-  }
-
   async getOrderDetails(
     accessToken: string,
     referenceNumber: string,
@@ -366,7 +357,7 @@ export class OwnerTeslaClient implements OwnerGateway {
     },
   ): Promise<OwnerHttpResponse> {
     const requestHeaders: Record<string, string> = {
-      "user-agent": "OrderPulse/0.5.0",
+      "user-agent": "OrderPulse/0.5.1",
       "x-tesla-user-agent": "TeslaApp/4.10.0",
       ...input.headers,
     };

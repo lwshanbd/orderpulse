@@ -12,7 +12,8 @@ import {
   ownerCodeChallenge,
   OwnerTeslaClient,
 } from "../src/owner-api.js";
-import { OwnerTokenService } from "../src/owner-service.js";
+import { OwnerTokenService, PreferredOrderProvider } from "../src/owner-service.js";
+import { TeslaRequestError } from "../src/tesla.js";
 import type {
   OwnerGateway,
   TeslaOrder,
@@ -52,13 +53,7 @@ class FakeOwner implements OwnerGateway {
   }
 
   async getOrders(): Promise<TeslaOrder[]> {
-    return [{
-      referenceNumber: "RN123456789",
-      orderStatus: "BOOKED",
-      modelCode: "MY",
-      vin: "7SAYGDEE9NF123456",
-      countryCode: "US",
-    }];
+    throw new Error("legacy Owner orders endpoint must not be used");
   }
 
   async getOrderDetails(
@@ -119,7 +114,18 @@ test("Owner PKCE authorization is one-time and enriches orders without exposing 
   assert.equal(ownerCodeChallenge(gateway.exchangedVerifier ?? ""), gateway.codeChallenge);
   assert.equal(service.authorized, true);
 
-  const orders = await service.getOrders();
+  const provider = new PreferredOrderProvider(service, {
+    async getOrders(): Promise<TeslaOrder[]> {
+      return [{
+        referenceNumber: "RN123456789",
+        orderStatus: "BOOKED",
+        modelCode: "MY",
+        vin: "7SAYGDEE9NF123456",
+        countryCode: "US",
+      }];
+    },
+  });
+  const orders = await provider.getOrders();
   const delivery = orders[0]?.orderPulseDelivery;
   assert.equal(delivery?.deliveryWindow, "September 13 - September 30");
   assert.equal(delivery?.appointment, "2026-09-20T14:00:00-04:00");
@@ -145,6 +151,35 @@ test("Owner PKCE authorization is one-time and enriches orders without exposing 
     ),
     /already used/,
   );
+  database.close();
+});
+
+test("official Fleet orders survive an unavailable Owner delivery endpoint", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "orderpulse-owner-fallback-"));
+  const database = new OrderPulseDatabase(
+    join(directory, "orderpulse.sqlite"),
+    new SecretBox(randomBytes(32)),
+  );
+  const gateway = new FakeOwner();
+  gateway.getOrderDetails = async () => {
+    throw new TeslaRequestError({ status: 403, message: "forbidden" });
+  };
+  const service = new OwnerTokenService(database, gateway, 600);
+  const stateUrl = service.beginAuthorization();
+  await service.completeAuthorization(
+    `tesla://auth/callback?code=owner-code&state=${encodeURIComponent(stateUrl.searchParams.get("state") ?? "")}`,
+  );
+  const fleetOrder: TeslaOrder = {
+    referenceNumber: "RN123456789",
+    orderStatus: "BOOKED",
+    modelCode: "MY",
+    countryCode: "US",
+  };
+  const provider = new PreferredOrderProvider(service, {
+    async getOrders(): Promise<TeslaOrder[]> { return [fleetOrder]; },
+  });
+
+  assert.deepEqual(await provider.getOrders(), [fleetOrder]);
   database.close();
 });
 

@@ -80,9 +80,8 @@ export class OwnerTokenService {
     this.#database.saveOwnerTokens({ tokens });
   }
 
-  async getOrders(): Promise<TeslaOrder[]> {
+  async enrichOrders(orders: TeslaOrder[]): Promise<TeslaOrder[]> {
     return this.#withAccessToken(async (accessToken) => {
-      const orders = await this.#owner.getOrders(accessToken);
       const enriched: TeslaOrder[] = [];
       for (const order of orders) {
         if (typeof order.referenceNumber !== "string" || order.referenceNumber.length === 0) {
@@ -103,22 +102,10 @@ export class OwnerTokenService {
     });
   }
 
-  async getFirstOrderDetails(): Promise<unknown> {
-    return this.#withAccessToken(async (accessToken) => {
-      const orders = await this.#owner.getOrders(accessToken);
-      const order = orders.find(
-        (candidate) =>
-          typeof candidate.referenceNumber === "string" && candidate.referenceNumber.length > 0,
-      );
-      if (!order?.referenceNumber) {
-        throw new Error("Tesla did not return an active owner order");
-      }
-      return this.#owner.getOrderDetails(
-        accessToken,
-        order.referenceNumber,
-        order.countryCode,
-      );
-    });
+  async getOrderDetails(referenceNumber: string, countryCode?: string): Promise<unknown> {
+    return this.#withAccessToken((accessToken) =>
+      this.#owner.getOrderDetails(accessToken, referenceNumber, countryCode),
+    );
   }
 
   revoke(): void {
@@ -175,7 +162,17 @@ export class PreferredOrderProvider {
     this.#fleet = fleet;
   }
 
-  getOrders(): Promise<TeslaOrder[]> {
-    return this.#owner.authorized ? this.#owner.getOrders() : this.#fleet.getOrders();
+  async getOrders(): Promise<TeslaOrder[]> {
+    const orders = await this.#fleet.getOrders();
+    if (!this.#owner.authorized) return orders;
+    try {
+      return await this.#owner.enrichOrders(orders);
+    } catch (error) {
+      // The delivery endpoint is private and may change independently. Keep
+      // official Fleet API order tracking alive and preserve cached delivery
+      // details when Tesla rejects only the optional enrichment request.
+      if (error instanceof TeslaRequestError) return orders;
+      throw error;
+    }
   }
 }

@@ -162,10 +162,11 @@ function parseBasicAuthorization(header: string | undefined): [string, string] |
 function publicError(error: unknown): { statusCode: number; body: Record<string, unknown> } {
   if (error instanceof TeslaRequestError) {
     return {
-      statusCode: error.status === 401 ? 401 : 502,
+      statusCode: 502,
       body: {
         error: "tesla_api_error",
-        message: error.message,
+        message: "Tesla rejected the upstream order request",
+        upstreamStatus: error.status,
         ...(error.code ? { teslaCode: error.code } : {}),
         ...(error.transactionId ? { transactionId: error.transactionId } : {}),
       },
@@ -729,7 +730,18 @@ export function createApp({
       if (!ownerService?.authorized) {
         return reply.code(409).send({ error: "owner_not_authorized" });
       }
-      const details = await ownerService.getFirstOrderDetails();
+      const orders = await tokenService.getOrders();
+      const order = orders.find(
+        (candidate) =>
+          typeof candidate.referenceNumber === "string" && candidate.referenceNumber.length > 0,
+      );
+      if (!order?.referenceNumber) {
+        return reply.code(409).send({ error: "owner_order_unavailable" });
+      }
+      const details = await ownerService.getOrderDetails(
+        order.referenceNumber,
+        order.countryCode,
+      );
       return {
         source: "undocumented_tesla_delivery_api",
         warning: "This endpoint is not part of the supported Tesla Fleet API",

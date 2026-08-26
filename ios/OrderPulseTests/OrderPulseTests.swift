@@ -52,6 +52,18 @@ final class OrderPulseTests: XCTestCase {
         XCTAssertFalse(AppModel.isCancellation(URLError(.timedOut)))
     }
 
+    func testTeslaUpstreamErrorDoesNotExposeRawMessage() {
+        let error = APIError.server(
+            status: 502,
+            code: "tesla_api_error",
+            message: "forbidden, see https://developer.tesla.com/docs/fleet-api"
+        )
+        XCTAssertEqual(
+            error.errorDescription,
+            "Tesla 暂时拒绝了此次实时检查。已保存的数据不会丢失，请稍后再试。"
+        )
+    }
+
     func testTeslaTemplateValuesAreNotDisplayedAsRealProgress() throws {
         let data = Data(#"""
         {

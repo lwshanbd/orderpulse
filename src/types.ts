@@ -106,7 +106,6 @@ export interface OwnerGateway {
     codeVerifier: string;
   }): Promise<TeslaTokenResponse>;
   refresh(refreshToken: string): Promise<TeslaTokenResponse>;
-  getOrders(accessToken: string): Promise<TeslaOrder[]>;
   getOrderDetails(
     accessToken: string,
     referenceNumber: string,
