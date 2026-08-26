@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { connect, type IncomingHttpHeaders } from "node:http2";
 
 import type {
   OrderDeliveryDetails,
@@ -20,6 +21,101 @@ interface OwnerHttpResponse {
   headers: Headers;
   text: string;
 }
+
+export interface OwnerTokenRequestInput {
+  url: URL;
+  headers: Record<string, string>;
+  body: string;
+  timeoutMs: number;
+}
+
+export type OwnerTokenRequest = (
+  input: OwnerTokenRequestInput,
+) => Promise<OwnerHttpResponse>;
+
+function headersFromHttp2(headers: IncomingHttpHeaders): Headers {
+  const result = new Headers();
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.startsWith(":") || value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) result.append(name, item);
+    } else {
+      result.set(name, value.toString());
+    }
+  }
+  return result;
+}
+
+export const ownerHttp2TokenRequest: OwnerTokenRequest = async (input) =>
+  new Promise((resolve, reject) => {
+    const session = connect(input.url.origin, {
+      minVersion: "TLSv1.3",
+      maxVersion: "TLSv1.3",
+    });
+    let settled = false;
+
+    const timeout = setTimeout(() => {
+      finish(new Error("Tesla Owner token request timed out"));
+    }, input.timeoutMs);
+
+    const finish = (error?: Error, response?: OwnerHttpResponse): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) {
+        session.destroy();
+        reject(error);
+        return;
+      }
+      session.close();
+      if (!response) {
+        reject(new Error("Tesla Owner token request ended without a response"));
+        return;
+      }
+      resolve(response);
+    };
+
+    session.once("error", (error) => finish(error));
+    session.once("connect", () => {
+      if (session.alpnProtocol !== "h2") {
+        finish(new Error("Tesla Owner token endpoint did not negotiate HTTP/2"));
+        return;
+      }
+
+      let responseHeaders: IncomingHttpHeaders = {};
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      const request = session.request({
+        ":method": "POST",
+        ":scheme": input.url.protocol.slice(0, -1),
+        ":authority": input.url.host,
+        ":path": `${input.url.pathname}${input.url.search}`,
+        ...input.headers,
+        "content-length": Buffer.byteLength(input.body).toString(),
+      });
+      request.once("response", (headers) => {
+        responseHeaders = headers;
+      });
+      request.on("data", (chunk: Buffer) => {
+        totalBytes += chunk.byteLength;
+        if (totalBytes > 5_000_000) {
+          request.close();
+          finish(new Error("Tesla Owner token response exceeded the size limit"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      request.once("end", () => {
+        finish(undefined, {
+          status: Number(responseHeaders[":status"] ?? 0),
+          headers: headersFromHttp2(responseHeaders),
+          text: Buffer.concat(chunks).toString("utf8"),
+        });
+      });
+      request.once("error", (error) => finish(error));
+      request.end(input.body);
+    });
+  });
 
 function headerValue(headers: Headers, name: string): string | null {
   return headers.get(name);
@@ -269,10 +365,16 @@ export function ownerCodeChallenge(codeVerifier: string): string {
 export class OwnerTeslaClient implements OwnerGateway {
   readonly #requestTimeoutMs: number;
   readonly #fetch: typeof fetch;
+  readonly #sendTokenRequest: OwnerTokenRequest;
 
-  constructor(requestTimeoutMs: number, fetchImplementation?: typeof fetch) {
+  constructor(
+    requestTimeoutMs: number,
+    fetchImplementation?: typeof fetch,
+    tokenRequestImplementation: OwnerTokenRequest = ownerHttp2TokenRequest,
+  ) {
     this.#requestTimeoutMs = requestTimeoutMs;
     this.#fetch = fetchImplementation ?? fetch;
+    this.#sendTokenRequest = tokenRequestImplementation;
   }
 
   buildAuthorizationUrl(input: { state: string; codeChallenge: string }): URL {
@@ -329,26 +431,30 @@ export class OwnerTeslaClient implements OwnerGateway {
   }
 
   async #tokenRequest(body: URLSearchParams): Promise<TeslaTokenResponse> {
-    const response = await this.#request(new URL(OWNER_TOKEN_URL), {
-      method: "POST",
+    const serializedBody = body.toString();
+    const response = await this.#sendTokenRequest({
+      url: new URL(OWNER_TOKEN_URL),
       headers: {
         accept: "application/json",
         "content-type": "application/x-www-form-urlencoded",
+        "user-agent": "OrderPulse/0.5.2",
+        "x-tesla-user-agent": "TeslaApp/4.10.0",
       },
-      body: body.toString(),
+      body: serializedBody,
+      timeoutMs: this.#requestTimeoutMs,
     });
     return assertTokenResponse(await this.#parse(response));
   }
 
   async #get(url: URL, accessToken: string): Promise<unknown> {
-    const response = await this.#request(url, {
+    const response = await this.#fetchRequest(url, {
       method: "GET",
       headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
     });
     return this.#parse(response);
   }
 
-  async #request(
+  async #fetchRequest(
     url: URL,
     input: {
       method: "GET" | "POST";
@@ -357,7 +463,7 @@ export class OwnerTeslaClient implements OwnerGateway {
     },
   ): Promise<OwnerHttpResponse> {
     const requestHeaders: Record<string, string> = {
-      "user-agent": "OrderPulse/0.5.1",
+      "user-agent": "OrderPulse/0.5.2",
       "x-tesla-user-agent": "TeslaApp/4.10.0",
       ...input.headers,
     };

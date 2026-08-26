@@ -220,7 +220,7 @@ Fleet 授权可以读取基础订单状态，但预计交付窗口等信息位�
 
 成功后检查 `/api/status` 的 `ownerAuthorized` 为 `true`，然后手动执行一次 `/api/polling/run`。第一次只建立交付详情基线，不推送；此后交付窗口、预约、VIN 分配、地点、顾问和 Tesla App 任务状态发生变化才提醒。iOS App 会直接显示这些字段。
 
-这套 Owner 接口不是 Tesla Fleet API 的正式合约，Tesla 将来可能修改或关闭它。OrderPulse 使用 Node 的标准 HTTPS `fetch`，固定只向 Tesla 域名发送请求，并且查询阶段只有 GET；只保存白名单字段，请求失败时保留最后一次成功快照，不会伪造状态变化。
+这套 Owner 接口不是 Tesla Fleet API 的正式合约，Tesla 将来可能修改或关闭它。OrderPulse 对 `auth.tesla.com` 的 Owner token 交换和刷新固定使用 HTTP/2 + TLS 1.3，交付详情查询则使用目标服务器实际支持的标准 HTTPS；请求只发送到固定 Tesla 域名，查询阶段只有 GET。服务只保存白名单字段，请求失败时保留最后一次成功快照，不会伪造状态变化。
 
 ## 备份与恢复
 
