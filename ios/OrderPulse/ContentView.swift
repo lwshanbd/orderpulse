@@ -122,7 +122,7 @@ private struct DashboardView: View {
                 }
                 .padding()
             }
-            .refreshable { await model.refresh() }
+            .refreshable { await model.refreshFromTesla() }
             .navigationTitle("OrderPulse")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -143,11 +143,25 @@ private struct DashboardView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(polling.enabled ? "自动检查已开启" : "自动检查尚未开启")
                     .font(.subheadline.weight(.semibold))
-                Text(polling.enabled ? "下次：\(DateText.display(polling.nextPollAt))" : "App 刷新只读取缓存，不会调用 Tesla")
+                Text(model.refreshStatus ?? (polling.enabled
+                    ? "下次：\(DateText.display(polling.nextPollAt))"
+                    : "自动轮询关闭；仍可手动检查"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Button {
+                Task { await model.refreshFromTesla() }
+            } label: {
+                if model.isLoading {
+                    ProgressView()
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.isLoading)
+            .accessibilityLabel("立即从 Tesla 检查")
         }
         .padding()
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))

@@ -59,6 +59,7 @@ const MAX_LOGIN_FAILURES = 10;
 const MAX_TRACKED_LOGIN_IPS = 1_024;
 const PAIRING_WINDOW_MS = 15 * 60 * 1_000;
 const MAX_PAIRING_FAILURES = 10;
+const MOBILE_REFRESH_COOLDOWN_MS = 5 * 60 * 1_000;
 const pairingRequestSchema = z.object({
   code: z.string().min(8).max(16),
   name: z.string().trim().min(1).max(80),
@@ -335,6 +336,23 @@ export function createApp({
     request.mobileDeviceId = deviceId;
   }
 
+  function mobileBootstrapPayload(): Record<string, unknown> {
+    const monitorStatus = orderMonitor.status();
+    return {
+      serverTime: new Date().toISOString(),
+      apnsEnabled: notifications?.enabled ?? false,
+      ownerAuthorized: ownerService?.authorized ?? false,
+      orders: database.listOrderSnapshots().map(serializeSnapshot),
+      events: database.listOrderEvents(50).map(serializeEvent),
+      polling: {
+        enabled: monitorStatus.enabled,
+        inProgress: monitorStatus.inProgress,
+        nextPollAt: isoTime(monitorStatus.nextPollAt),
+        latestRun: serializePollRun(monitorStatus.latestRun),
+      },
+    };
+  }
+
   app.get("/healthz", async () => ({ status: "ok" }));
 
   app.get("/.well-known/appspecific/com.tesla.3p.public-key.pem", async (_request, reply) => {
@@ -591,21 +609,37 @@ export function createApp({
     return { deviceId, accessToken };
   });
 
-  app.get("/api/mobile/bootstrap", { preHandler: requireMobile }, async () => {
-    const monitorStatus = orderMonitor.status();
-    return {
-      serverTime: new Date().toISOString(),
-      apnsEnabled: notifications?.enabled ?? false,
-      ownerAuthorized: ownerService?.authorized ?? false,
-      orders: database.listOrderSnapshots().map(serializeSnapshot),
-      events: database.listOrderEvents(50).map(serializeEvent),
-      polling: {
-        enabled: monitorStatus.enabled,
-        inProgress: monitorStatus.inProgress,
-        nextPollAt: isoTime(monitorStatus.nextPollAt),
-        latestRun: serializePollRun(monitorStatus.latestRun),
-      },
-    };
+  app.get("/api/mobile/bootstrap", { preHandler: requireMobile }, async () =>
+    mobileBootstrapPayload(),
+  );
+
+  app.post("/api/mobile/refresh", { preHandler: requireMobile }, async (_request, reply) => {
+    const status = orderMonitor.status();
+    const latestStartedAt = status.latestRun?.startedAt ?? null;
+    if (!status.inProgress && latestStartedAt !== null) {
+      const retryAfterMs = latestStartedAt + MOBILE_REFRESH_COOLDOWN_MS - Date.now();
+      if (retryAfterMs > 0) {
+        const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1_000));
+        reply.header("Retry-After", retryAfterSeconds);
+        return {
+          polled: false,
+          retryAfterSeconds,
+          bootstrap: mobileBootstrapPayload(),
+        };
+      }
+    }
+
+    try {
+      await orderMonitor.pollNow("manual");
+      return {
+        polled: true,
+        retryAfterSeconds: Math.ceil(MOBILE_REFRESH_COOLDOWN_MS / 1_000),
+        bootstrap: mobileBootstrapPayload(),
+      };
+    } catch (caught) {
+      const safe = publicError(caught);
+      return reply.code(safe.statusCode).send(safe.body);
+    }
   });
 
   app.post(

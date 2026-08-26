@@ -126,7 +126,7 @@ docker compose ps
 curl -u orderpulse -X POST https://orderpulse.baodishan.com/api/devices/pairing-code
 ```
 
-在 OrderPulse App 输入返回的 `code`。配对码 1 小时后失效且只能用一次；它只负责首次交换设备凭证。换到的设备凭证没有 1 小时限制，会一直保存在 iOS Keychain，直到用户解除配对或管理员撤销设备。App 下拉刷新只读取 NAS 已有快照，不会额外请求 Tesla；Tesla 的调用频率仍完全由 NAS 轮询器控制。
+在 OrderPulse App 输入返回的 `code`。配对码 1 小时后失效且只能用一次；它只负责首次交换设备凭证。换到的设备凭证没有 1 小时限制，会一直保存在 iOS Keychain，直到用户解除配对或管理员撤销设备。App 下拉刷新或点按“立即检查”会请求 NAS 拉取一次 Tesla 数据，App 本身始终不保存 Tesla token。服务端对手动刷新设有 5 分钟全局冷却，冷却期内只返回最新缓存，避免重复计费和触发上游限流。
 
 ## Apple Push Notifications
 

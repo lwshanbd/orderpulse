@@ -18,6 +18,12 @@ struct BootstrapResponse: Decodable {
     let polling: PollingStatus
 }
 
+struct MobileRefreshResponse: Decodable {
+    let polled: Bool
+    let retryAfterSeconds: Int?
+    let bootstrap: BootstrapResponse
+}
+
 struct OrderSnapshot: Decodable, Identifiable, Equatable {
     let orderId: String
     let referenceNumber: String?

@@ -36,6 +36,16 @@ struct APIClient {
         )
     }
 
+    func refreshOrders(accessToken: String) async throws -> MobileRefreshResponse {
+        try await request(
+            path: "/api/mobile/refresh",
+            method: "POST",
+            body: Optional<[String: String]>.none,
+            accessToken: accessToken,
+            response: MobileRefreshResponse.self
+        )
+    }
+
     func beginOwnerAuthorization(accessToken: String) async throws -> OwnerAuthorizationStartResponse {
         try await request(
             path: "/api/mobile/owner-authorization/start",

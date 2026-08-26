@@ -366,7 +366,7 @@ export class OwnerTeslaClient implements OwnerGateway {
     },
   ): Promise<OwnerHttpResponse> {
     const requestHeaders: Record<string, string> = {
-      "user-agent": "OrderPulse/0.4.3",
+      "user-agent": "OrderPulse/0.5.0",
       "x-tesla-user-agent": "TeslaApp/4.10.0",
       ...input.headers,
     };

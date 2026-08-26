@@ -352,6 +352,23 @@ test("service protects admin routes and completes a one-time OAuth callback", as
   assert.match(bootstrap.body, /AWAITING_VIN/);
   assert.doesNotMatch(bootstrap.body, /RN123456789|5YJ12345678901234|123 Private Road/);
 
+  const unauthorizedMobileRefresh = await app.inject({
+    method: "POST",
+    url: "/api/mobile/refresh",
+  });
+  assert.equal(unauthorizedMobileRefresh.statusCode, 401);
+
+  const mobileRefresh = await app.inject({
+    method: "POST",
+    url: "/api/mobile/refresh",
+    headers: { authorization: mobileAuthorization },
+  });
+  assert.equal(mobileRefresh.statusCode, 200);
+  assert.equal(mobileRefresh.json().polled, false);
+  assert.ok((mobileRefresh.json().retryAfterSeconds as number) > 0);
+  assert.match(JSON.stringify(mobileRefresh.json().bootstrap), /AWAITING_VIN/);
+  assert.doesNotMatch(mobileRefresh.body, /RN123456789|5YJ12345678901234|123 Private Road/);
+
   const ownerStart = await app.inject({
     method: "POST",
     url: "/api/mobile/owner-authorization/start",

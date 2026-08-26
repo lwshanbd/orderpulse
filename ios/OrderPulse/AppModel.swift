@@ -12,6 +12,7 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var notificationStatus = "尚未启用"
     @Published private(set) var isConnectingOwner = false
+    @Published private(set) var refreshStatus: String?
 
     private let api = APIClient()
     private var accessToken: String?
@@ -65,6 +66,32 @@ final class AppModel: ObservableObject {
         defer { isLoading = false }
         do {
             bootstrap = try await api.bootstrap(accessToken: accessToken)
+        } catch let error as APIError {
+            if case .server(status: 401, code: _, message: _) = error {
+                clearLocalPairing()
+            }
+            errorMessage = error.localizedDescription
+        } catch {
+            guard !Self.isCancellation(error) else { return }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func refreshFromTesla() async {
+        guard let accessToken, !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        refreshStatus = nil
+        defer { isLoading = false }
+        do {
+            let response = try await api.refreshOrders(accessToken: accessToken)
+            bootstrap = response.bootstrap
+            if response.polled {
+                refreshStatus = "已从 Tesla 获取最新状态"
+            } else {
+                let minutes = max(1, Int(ceil(Double(response.retryAfterSeconds ?? 60) / 60)))
+                refreshStatus = "刚刚检查过，约 \(minutes) 分钟后可再次检查"
+            }
         } catch let error as APIError {
             if case .server(status: 401, code: _, message: _) = error {
                 clearLocalPairing()
@@ -141,6 +168,7 @@ final class AppModel: ObservableObject {
         bootstrap = nil
         isPaired = false
         notificationStatus = "尚未启用"
+        refreshStatus = nil
     }
 
     private func finishOwnerAuthorization(callbackURL: URL?, error: Error?) async {
