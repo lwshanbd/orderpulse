@@ -60,6 +60,16 @@ function stringValue(value: unknown, maxLength = 512): string | null {
   return normalized.length > 0 && normalized.length <= maxLength ? normalized : null;
 }
 
+function displayStringValue(value: unknown, maxLength = 512): string | null {
+  const text = stringValue(value, maxLength);
+  return text && !text.includes("##") ? text : null;
+}
+
+function vinValue(value: unknown): string | null {
+  const text = displayStringValue(value, 64)?.toUpperCase() ?? null;
+  return text && /^[A-HJ-NPR-Z0-9]{17}$/.test(text) ? text : null;
+}
+
 function numberValue(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -98,7 +108,7 @@ function findFirstKey(value: unknown, keys: ReadonlySet<string>, depth = 0): unk
 }
 
 function maskedIdentifier(value: unknown, visibleCharacters: number): string | null {
-  const text = stringValue(value, 1_024);
+  const text = displayStringValue(value, 1_024);
   if (!text) return null;
   if (text.length <= visibleCharacters) return "•".repeat(text.length);
   return `${"•".repeat(Math.min(text.length - visibleCharacters, 12))}${text.slice(-visibleCharacters)}`;
@@ -120,11 +130,11 @@ function taskSummaries(raw: unknown): OrderTaskSummary[] {
       const card = isRecord(item.card) ? item.card : null;
       const strings = isRecord(item.strings) ? item.strings : null;
       const title =
-        stringValue(card?.title, 160) ??
-        stringValue(strings?.title, 160) ??
-        stringValue(strings?.name, 160) ??
-        stringValue(strings?.taskTitle, 160) ??
-        stringValue(strings?.taskName, 160) ??
+        displayStringValue(card?.title, 160) ??
+        displayStringValue(strings?.title, 160) ??
+        displayStringValue(strings?.name, 160) ??
+        displayStringValue(strings?.taskTitle, 160) ??
+        displayStringValue(strings?.taskName, 160) ??
         id;
       return [{
         id,
@@ -162,13 +172,14 @@ export function extractOrderDeliveryDetails(
 ): OrderDeliveryDetails {
   const tasks = taskSummaries(raw);
   const rawVin =
-    stringValue(order.vin, 1_024) ??
-    stringValue(atPath(raw, ["strings", "vin"]), 1_024) ??
-    stringValue(atPath(raw, ["tasks", "registration", "orderDetails", "vin"]), 1_024);
+    vinValue(order.vin) ??
+    vinValue(atPath(raw, ["strings", "vin"])) ??
+    vinValue(atPath(raw, ["tasks", "registration", "orderDetails", "vin"]));
   const vin = maskedIdentifier(rawVin, 6);
   const routingLocation =
-    stringValue(atPath(raw, ["tasks", "registration", "orderDetails", "vehicleRoutingLocation"])) ??
-    stringValue(atPath(raw, ["tasks", "transit", "currentLocation"]));
+    displayStringValue(
+      atPath(raw, ["tasks", "registration", "orderDetails", "vehicleRoutingLocation"]),
+    ) ?? displayStringValue(atPath(raw, ["tasks", "transit", "currentLocation"]));
   const plate =
     atPath(raw, ["tasks", "deliveryDetails", "regData", "reggieLicensePlate"]) ??
     atPath(raw, ["tasks", "registration", "plateNumber"]);
@@ -180,12 +191,14 @@ export function extractOrderDeliveryDetails(
   return {
     vin,
     vinAssigned: vin !== null,
-    deliveryWindow: stringValue(atPath(raw, ["tasks", "scheduling", "deliveryWindowDisplay"])),
+    deliveryWindow: displayStringValue(
+      atPath(raw, ["tasks", "scheduling", "deliveryWindowDisplay"]),
+    ),
     appointment:
-      stringValue(atPath(raw, ["tasks", "scheduling", "deliveryAppointmentDate"]), 1_024) ??
-      stringValue(atPath(raw, ["tasks", "scheduling", "strings", "apptDateTimeStringRange"]), 1_024) ??
-      stringValue(atPath(raw, ["tasks", "scheduling", "apptDateTimeAddressStr"]), 1_024),
-    appointmentStatus: stringValue(
+      displayStringValue(atPath(raw, ["tasks", "scheduling", "deliveryAppointmentDate"]), 1_024) ??
+      displayStringValue(atPath(raw, ["tasks", "scheduling", "strings", "apptDateTimeStringRange"]), 1_024) ??
+      displayStringValue(atPath(raw, ["tasks", "scheduling", "apptDateTimeAddressStr"]), 1_024),
+    appointmentStatus: displayStringValue(
       atPath(raw, ["tasks", "scheduling", "appointmentStatusName"]),
       256,
     ),
@@ -198,16 +211,27 @@ export function extractOrderDeliveryDetails(
     deliveryEstimatesEnabled: booleanValue(
       atPath(raw, ["tasks", "scheduling", "isDeliveryEstimatesEnabled"]),
     ),
-    etaToDeliveryCenter: stringValue(atPath(raw, ["tasks", "finalPayment", "data", "etaToDeliveryCenter"])),
+    etaToDeliveryCenter: displayStringValue(
+      atPath(raw, ["tasks", "finalPayment", "data", "etaToDeliveryCenter"]),
+    ),
     vehicleLocation: routingLocation,
     deliveryMethod:
-      stringValue(atPath(raw, ["tasks", "scheduling", "deliveryType"])) ??
-      stringValue(atPath(raw, ["tasks", "scheduling", "deliveryMethod"])),
-    deliveryCenter: stringValue(atPath(raw, ["tasks", "scheduling", "deliveryAddressTitle"])),
+      displayStringValue(atPath(raw, ["tasks", "scheduling", "deliveryType"])) ??
+      displayStringValue(atPath(raw, ["tasks", "scheduling", "deliveryMethod"])),
+    deliveryCenter: displayStringValue(
+      atPath(raw, ["tasks", "scheduling", "deliveryAddressTitle"]),
+    ),
     odometer: numberValue(atPath(raw, ["tasks", "registration", "orderDetails", "vehicleOdometer"])),
-    odometerUnit: stringValue(atPath(raw, ["tasks", "registration", "orderDetails", "vehicleOdometerType"]), 32),
-    reservationDate: stringValue(atPath(raw, ["tasks", "registration", "orderDetails", "reservationDate"])),
-    orderBookedDate: stringValue(atPath(raw, ["tasks", "registration", "orderDetails", "orderBookedDate"])),
+    odometerUnit: displayStringValue(
+      atPath(raw, ["tasks", "registration", "orderDetails", "vehicleOdometerType"]),
+      32,
+    ),
+    reservationDate: displayStringValue(
+      atPath(raw, ["tasks", "registration", "orderDetails", "reservationDate"]),
+    ),
+    orderBookedDate: displayStringValue(
+      atPath(raw, ["tasks", "registration", "orderDetails", "orderBookedDate"]),
+    ),
     licensePlate: maskedIdentifier(plate, 3),
     financingComplete: financingComplete(raw),
     deliveryAgentAssigned: booleanValue(agentAssigned),
@@ -342,7 +366,7 @@ export class OwnerTeslaClient implements OwnerGateway {
     },
   ): Promise<OwnerHttpResponse> {
     const requestHeaders: Record<string, string> = {
-      "user-agent": "OrderPulse/0.4.2",
+      "user-agent": "OrderPulse/0.4.3",
       "x-tesla-user-agent": "TeslaApp/4.10.0",
       ...input.headers,
     };

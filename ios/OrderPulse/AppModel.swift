@@ -71,8 +71,13 @@ final class AppModel: ObservableObject {
             }
             errorMessage = error.localizedDescription
         } catch {
+            guard !Self.isCancellation(error) else { return }
             errorMessage = error.localizedDescription
         }
+    }
+
+    nonisolated static func isCancellation(_ error: Error) -> Bool {
+        error is CancellationError || (error as? URLError)?.code == .cancelled
     }
 
     func enableNotifications() async {

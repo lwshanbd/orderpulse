@@ -214,8 +214,8 @@ private struct OrderProgressView: View {
         return [
             ("下单", "doc.text.fill", true),
             ("融资", "creditcard.fill", details?.financingComplete == true),
-            ("VIN", "key.fill", details?.vinAssigned == true),
-            ("预约", "calendar.badge.checkmark", details?.appointment != nil),
+            ("VIN", "key.fill", details?.hasAssignedVIN == true),
+            ("预约", "calendar.badge.checkmark", details?.hasAppointment == true),
         ]
     }
 
@@ -263,17 +263,19 @@ private struct DeliveryDetailsView: View {
             if let window = details.deliveryWindow {
                 DetailRow(icon: "calendar", label: "预计窗口", value: window, color: .purple)
             }
-            if let appointment = details.appointment {
+            if let appointment = details.displayedAppointment {
                 DetailRow(icon: "calendar.badge.checkmark", label: "交付预约", value: appointment, color: .green)
             }
-            if let status = details.appointmentStatus {
+            if let status = details.displayedAppointmentStatus {
                 DetailRow(icon: "clock.badge.checkmark", label: "预约状态", value: status.orderPulseDisplayCode, color: .green)
             }
-            if let valid = details.appointmentValid {
-                DetailRow(icon: "checkmark.seal.fill", label: "预约有效", value: valid ? "是" : "否", color: valid ? .green : .orange)
-            }
-            if let eligible = details.rescheduleEligible {
-                DetailRow(icon: "calendar.badge.clock", label: "可以改期", value: eligible ? "是" : "否", color: .purple)
+            if details.hasAppointment || details.displayedAppointmentStatus != nil {
+                if let valid = details.appointmentValid {
+                    DetailRow(icon: "checkmark.seal.fill", label: "预约有效", value: valid ? "是" : "否", color: valid ? .green : .orange)
+                }
+                if let eligible = details.rescheduleEligible {
+                    DetailRow(icon: "calendar.badge.clock", label: "可以改期", value: eligible ? "是" : "否", color: .purple)
+                }
             }
             if let eta = details.etaToDeliveryCenter {
                 DetailRow(icon: "truck.box.fill", label: "到店 ETA", value: DateText.display(eta), color: .orange)
@@ -281,8 +283,8 @@ private struct DeliveryDetailsView: View {
             if let location = details.vehicleLocation {
                 DetailRow(icon: "location.fill", label: "车辆位置", value: location, color: .indigo)
             }
-            if details.vinAssigned {
-                DetailRow(icon: "key.fill", label: "VIN", value: details.vin ?? "已分配", color: .mint)
+            if details.hasAssignedVIN, let vin = details.displayedVIN {
+                DetailRow(icon: "key.fill", label: "VIN", value: vin, color: .mint)
             }
             if let assigned = details.deliveryAgentAssigned {
                 DetailRow(icon: "person.crop.circle.badge.checkmark", label: "交付顾问", value: assigned ? "已分配" : "尚未分配", color: .teal)

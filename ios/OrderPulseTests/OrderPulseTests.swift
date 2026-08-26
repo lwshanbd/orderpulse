@@ -45,4 +45,28 @@ final class OrderPulseTests: XCTestCase {
         let redirect = components?.queryItems?.first(where: { $0.name == "redirect_uri" })?.value
         XCTAssertEqual(redirect, "tesla://auth/callback")
     }
+
+    func testRefreshCancellationIsNotPresentedAsAnError() {
+        XCTAssertTrue(AppModel.isCancellation(CancellationError()))
+        XCTAssertTrue(AppModel.isCancellation(URLError(.cancelled)))
+        XCTAssertFalse(AppModel.isCancellation(URLError(.timedOut)))
+    }
+
+    func testTeslaTemplateValuesAreNotDisplayedAsRealProgress() throws {
+        let data = Data(#"""
+        {
+          "vin":"•••••#vin##",
+          "vinAssigned":true,
+          "appointment":"##date## between ##startTime## - ##endTime##",
+          "pendingTaskCount":0,
+          "totalTaskCount":0,
+          "tasks":[]
+        }
+        """#.utf8)
+        let details = try JSONDecoder().decode(DeliveryDetails.self, from: data)
+        XCTAssertNil(details.displayedVIN)
+        XCTAssertNil(details.displayedAppointment)
+        XCTAssertFalse(details.hasAssignedVIN)
+        XCTAssertFalse(details.hasAppointment)
+    }
 }

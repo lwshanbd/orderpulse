@@ -72,10 +72,21 @@ struct DeliveryDetails: Decodable, Equatable {
     let totalTaskCount: Int
     let tasks: [OrderTaskSummary]
 
+    var displayedVIN: String? { Self.concreteValue(vin) }
+    var displayedAppointment: String? { Self.concreteValue(appointment) }
+    var displayedAppointmentStatus: String? { Self.concreteValue(appointmentStatus) }
+    var hasAssignedVIN: Bool { vinAssigned && displayedVIN != nil }
+    var hasAppointment: Bool { displayedAppointment != nil }
+
     var hasUsefulData: Bool {
-        vinAssigned || deliveryWindow != nil || appointment != nil || appointmentStatus != nil ||
+        hasAssignedVIN || deliveryWindow != nil || hasAppointment || displayedAppointmentStatus != nil ||
         etaToDeliveryCenter != nil || deliveryMethod != nil ||
         deliveryCenter != nil || !tasks.isEmpty
+    }
+
+    private static func concreteValue(_ value: String?) -> String? {
+        guard let value, !value.contains("##") else { return nil }
+        return value
     }
 }
 

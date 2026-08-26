@@ -201,6 +201,28 @@ test("delivery extraction keeps only a small task summary allowlist", () => {
   assert.doesNotMatch(serialized, /Delivery appointment scheduled/);
 });
 
+test("delivery extraction rejects Tesla template placeholders", () => {
+  const delivery = extractOrderDeliveryDetails(
+    { referenceNumber: "RN1" },
+    {
+      strings: { vin: "#####vin###" },
+      tasks: {
+        scheduling: {
+          deliveryAppointmentDate: "##date## between ##startTime## - ##endTime##",
+          strings: { apptDateTimeStringRange: "##dateRange##" },
+          isValidAppointment: false,
+          isEligibleForReschedule: false,
+        },
+      },
+    },
+  );
+
+  assert.equal(delivery.vin, null);
+  assert.equal(delivery.vinAssigned, false);
+  assert.equal(delivery.appointment, null);
+  assert.doesNotMatch(JSON.stringify(delivery), /#vin|#date|#startTime|#endTime/);
+});
+
 test("Owner client uses PKCE form exchange and fixed Tesla detail endpoint", async () => {
   const requests: Array<{ url: string; init: RequestInit | undefined }> = [];
   const fakeFetch: typeof fetch = async (input, init) => {
