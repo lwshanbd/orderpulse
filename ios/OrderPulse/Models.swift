@@ -77,12 +77,8 @@ struct DeliveryDetails: Decodable, Equatable {
     var displayedAppointmentStatus: String? { Self.concreteValue(appointmentStatus) }
     var hasAssignedVIN: Bool { vinAssigned && displayedVIN != nil }
     var hasAppointment: Bool { displayedAppointment != nil }
-
-    var hasUsefulData: Bool {
-        hasAssignedVIN || deliveryWindow != nil || hasAppointment || displayedAppointmentStatus != nil ||
-        etaToDeliveryCenter != nil || deliveryMethod != nil ||
-        deliveryCenter != nil || !tasks.isEmpty
-    }
+    var vinDisplayText: String { displayedVIN ?? "尚未分配" }
+    var appointmentDisplayText: String { displayedAppointment ?? "尚未安排" }
 
     private static func concreteValue(_ value: String?) -> String? {
         guard let value, !value.contains("##") else { return nil }

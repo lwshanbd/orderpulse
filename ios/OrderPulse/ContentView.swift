@@ -183,13 +183,12 @@ private struct OrderCard: View {
                 OrderProgressView(order: order)
             }
 
-            if let details = order.delivery, details.hasUsefulData {
+            if let details = order.delivery {
                 Divider()
                 DeliveryDetailsView(details: details)
             } else {
-                Label("等待 Owner API 建立交付详情基线", systemImage: "hourglass")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                Divider()
+                DeliveryDetailsUnavailableView()
             }
 
             HStack {
@@ -263,9 +262,12 @@ private struct DeliveryDetailsView: View {
             if let window = details.deliveryWindow {
                 DetailRow(icon: "calendar", label: "预计窗口", value: window, color: .purple)
             }
-            if let appointment = details.displayedAppointment {
-                DetailRow(icon: "calendar.badge.checkmark", label: "交付预约", value: appointment, color: .green)
-            }
+            DetailRow(
+                icon: "calendar.badge.checkmark",
+                label: "提车日期",
+                value: details.appointmentDisplayText,
+                color: details.hasAppointment ? .green : .gray
+            )
             if let status = details.displayedAppointmentStatus {
                 DetailRow(icon: "clock.badge.checkmark", label: "预约状态", value: status.orderPulseDisplayCode, color: .green)
             }
@@ -283,9 +285,12 @@ private struct DeliveryDetailsView: View {
             if let location = details.vehicleLocation {
                 DetailRow(icon: "location.fill", label: "车辆位置", value: location, color: .indigo)
             }
-            if details.hasAssignedVIN, let vin = details.displayedVIN {
-                DetailRow(icon: "key.fill", label: "VIN", value: vin, color: .mint)
-            }
+            DetailRow(
+                icon: "key.fill",
+                label: "VIN",
+                value: details.vinDisplayText,
+                color: details.hasAssignedVIN ? .mint : .gray
+            )
             if let assigned = details.deliveryAgentAssigned {
                 DetailRow(icon: "person.crop.circle.badge.checkmark", label: "交付顾问", value: assigned ? "已分配" : "尚未分配", color: .teal)
             }
@@ -311,6 +316,28 @@ private struct DeliveryDetailsView: View {
                     }
                 }
             }
+        }
+    }
+}
+
+private struct DeliveryDetailsUnavailableView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("交付详情")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+
+            DetailRow(
+                icon: "calendar.badge.checkmark",
+                label: "提车日期",
+                value: "尚未安排",
+                color: .gray
+            )
+            DetailRow(icon: "key.fill", label: "VIN", value: "尚未分配", color: .gray)
+
+            Label("等待 Tesla 提供更多交付信息", systemImage: "hourglass")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }

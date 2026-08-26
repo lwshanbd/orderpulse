@@ -68,5 +68,7 @@ final class OrderPulseTests: XCTestCase {
         XCTAssertNil(details.displayedAppointment)
         XCTAssertFalse(details.hasAssignedVIN)
         XCTAssertFalse(details.hasAppointment)
+        XCTAssertEqual(details.vinDisplayText, "尚未分配")
+        XCTAssertEqual(details.appointmentDisplayText, "尚未安排")
     }
 }
